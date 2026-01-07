@@ -34,7 +34,7 @@ func TestSessionConfig_newUsername_AllFields(t *testing.T) {
 			PackageKey: "my_package_key",
 		},
 		Node: ProxyNodeConfig{
-			CountryCode: "us",
+			CountryCode: "US",
 			RegionID:    "new york",
 			CityID:      "new york city",
 			ISPID:       "verizon",
