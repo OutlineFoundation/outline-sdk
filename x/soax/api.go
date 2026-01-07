@@ -106,7 +106,8 @@ func (c *Client) doAndDecode(req *http.Request, result any) error {
 	}
 	if err := json.Unmarshal(body, result); err != nil {
 		return fmt.Errorf("failed to decode response: %w", err)
-	}	return nil
+	}
+	return nil
 }
 
 // GetResidentialISPs returns the available ISPs for the given location.
