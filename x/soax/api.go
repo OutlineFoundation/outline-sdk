@@ -100,10 +100,13 @@ func (c *Client) doAndDecode(req *http.Request, result any) error {
 		body, _ := io.ReadAll(resp.Body)
 		return fmt.Errorf("request failed with status %v: %v", resp.Status, string(body))
 	}
-	if err := json.NewDecoder(resp.Body).Decode(result); err != nil {
-		return fmt.Errorf("failed to decode response: %w", err)
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return fmt.Errorf("failed to read response body: %w", err)
 	}
-	return nil
+	if err := json.Unmarshal(body, result); err != nil {
+		return fmt.Errorf("failed to decode response: %w", err)
+	}	return nil
 }
 
 // GetResidentialISPs returns the available ISPs for the given location.
