@@ -80,27 +80,27 @@ func TestClient(t *testing.T) {
 	ctx := context.Background()
 
 	t.Run("GetResidentialISPs", func(t *testing.T) {
-		isps, err := client.GetResidentialISPs(ctx, "us", "ny", "nyc")
+		isps, err := client.GetResidentialISPs(ctx, "US", "ny", "nyc")
 		require.NoError(t, err)
 		require.Equal(t, []string{"isp1", "isp2"}, isps)
 	})
 
 	t.Run("GetMobileISPs", func(t *testing.T) {
-		isps, err := client.GetMobileISPs(ctx, "de", "be", "ber")
+		isps, err := client.GetMobileISPs(ctx, "DE", "be", "ber")
 		require.NoError(t, err)
 		require.Equal(t, []string{"op1", "op2"}, isps)
 	})
 
 	t.Run("GetRegions", func(t *testing.T) {
 		client.ConnType = ConnTypeMobile
-		regions, err := client.GetRegions(ctx, "fr", "orange")
+		regions, err := client.GetRegions(ctx, "FR", "orange")
 		require.NoError(t, err)
 		require.Equal(t, []string{"region1", "region2"}, regions)
 	})
 
 	t.Run("GetCities", func(t *testing.T) {
 		client.ConnType = ConnTypeResidential
-		cities, err := client.GetCities(ctx, "es", "movistar", "md")
+		cities, err := client.GetCities(ctx, "ES", "movistar", "md")
 		require.NoError(t, err)
 		require.Equal(t, []string{"city1", "city2"}, cities)
 	})
