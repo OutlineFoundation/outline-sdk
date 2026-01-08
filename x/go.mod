@@ -4,7 +4,7 @@ go 1.24.1
 
 toolchain go1.24.8
 
-// Due to https://github.com/Jigsaw-Code/outline-sdk/issues/501
+// Due to https://github.com/OutlineFoundation/outline-sdk/issues/501
 retract [v0.0.4, v0.0.6]
 
 require (
