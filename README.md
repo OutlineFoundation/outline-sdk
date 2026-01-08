@@ -11,21 +11,11 @@
 > [!IMPORTANT]
 > **New Module Path**
 >
-> As part of the [Outline transition](https://medium.com/jigsaw/introducing-the-outline-foundation-an-independent-home-for-outline-39fba2ab4e25) from Jigsaw to the new Outline Foundation, we are migrating our Go module paths to:
+> As part of the [Outline transition](https://medium.com/jigsaw/introducing-the-outline-foundation-an-independent-home-for-outline-39fba2ab4e25) from Jigsaw to the new Outline Foundation, we have migrated our Go module paths to:
 > - `golang.getoutline.org/sdk`
 > - `golang.getoutline.org/sdk/x`
 >
-> **Please update your imports to the new paths as soon as possible.** The new paths are currently available in **preview**. You must target these versions explicitly:
->
-> ```bash
-> # For the root module:
-> go get golang.getoutline.org/sdk@v0.0.21-alpha.1
->
-> # For the x module tools:
-> go run golang.getoutline.org/sdk/x/tools/resolve@v0.0.9-alpha.1
-> ```
->
-> *Note: The existing `github.com/Jigsaw-Code/outline-sdk` paths and the `@latest` tag will continue to resolve to the current stable versions (e.g., `v0.0.20`) during this transition period. Future stable releases will be published exclusively under the new module paths.*
+> **Please update your imports to the new paths as soon as possible.** The old `github.com/Jigsaw-Code/outline-sdk` paths are now deprecated and will no longer receive updates. If you encounter errors using `go get` or `go run` with the old paths, please switch to the new module paths. Future stable releases are published exclusively under the new module paths.
 
 The Outline SDK allows you to:
 
