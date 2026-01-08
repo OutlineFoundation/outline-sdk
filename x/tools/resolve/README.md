@@ -88,4 +88,4 @@ e4887.dscb.akamaiedge.net.
 
 You can see that the domain name in the query got split:
 
-![image](https://github.com/Jigsaw-Code/outline-sdk/assets/113565/195bfa95-6d35-40ef-84e0-b1d6e690bb84)
+![image](https://github.com/OutlineFoundation/outline-sdk/assets/113565/195bfa95-6d35-40ef-84e0-b1d6e690bb84)

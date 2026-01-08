@@ -29,8 +29,8 @@ import (
 	"sync"
 	"time"
 
-	"golang.getoutline.org/sdk/transport"
 	"github.com/gorilla/websocket"
+	"golang.getoutline.org/sdk/transport"
 )
 
 // NewStreamEndpoint creates a new Websocket Stream Endpoint. Streams are sent over
@@ -115,7 +115,7 @@ type gorillaConn struct {
 	wsConn *websocket.Conn
 
 	// websocket.Conn is not safe for concurrent use
-	// https://github.com/Jigsaw-Code/outline-apps/issues/2573
+	// https://github.com/OutlineFoundation/outline-apps/issues/2573
 	readMu, writeMu sync.Mutex
 
 	writeErr      error
