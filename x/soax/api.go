@@ -21,6 +21,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"strings"
 )
 
 const (
@@ -100,7 +101,11 @@ func (c *Client) doAndDecode(req *http.Request, result any) error {
 		body, _ := io.ReadAll(resp.Body)
 		return fmt.Errorf("request failed with status %v: %v", resp.Status, string(body))
 	}
-	if err := json.NewDecoder(resp.Body).Decode(result); err != nil {
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return fmt.Errorf("failed to read response body: %w", err)
+	}
+	if err := json.Unmarshal(body, result); err != nil {
 		return fmt.Errorf("failed to decode response: %w", err)
 	}
 	return nil
@@ -111,7 +116,7 @@ func (c *Client) doAndDecode(req *http.Request, result any) error {
 // API reference: https://helpcenter.soax.com/en/articles/6228391-getting-a-list-of-wifi-isps
 func (c *Client) GetResidentialISPs(ctx context.Context, countryCode, regionID, cityID string) ([]string, error) {
 	req, err := c.newRequest(ctx, "/api/get-country-isp", map[string]string{
-		"country_iso": countryCode,
+		"country_iso": strings.ToLower(countryCode),
 		"region":      regionID,
 		"city":        cityID,
 	})
@@ -130,7 +135,7 @@ func (c *Client) GetResidentialISPs(ctx context.Context, countryCode, regionID, 
 // API reference: https://helpcenter.soax.com/en/articles/6228381-getting-a-list-of-mobile-carriers
 func (c *Client) GetMobileISPs(ctx context.Context, countryCode, regionID, cityID string) ([]string, error) {
 	req, err := c.newRequest(ctx, "/api/get-country-operators", map[string]string{
-		"country_iso": countryCode,
+		"country_iso": strings.ToLower(countryCode),
 		"region":      regionID,
 		"city":        cityID,
 	})
@@ -148,7 +153,7 @@ func (c *Client) GetMobileISPs(ctx context.Context, countryCode, regionID, cityI
 // API reference: https://helpcenter.soax.com/en/articles/6227864-getting-a-list-of-regions
 func (c *Client) GetRegions(ctx context.Context, countryCode, isp string) ([]string, error) {
 	req, err := c.newRequest(ctx, "/api/get-country-regions", map[string]string{
-		"country_iso": countryCode,
+		"country_iso": strings.ToLower(countryCode),
 		"conn_type":   string(c.ConnType),
 		"provider":    isp,
 	})
@@ -166,7 +171,7 @@ func (c *Client) GetRegions(ctx context.Context, countryCode, isp string) ([]str
 // API reference: https://helpcenter.soax.com/en/articles/6228092-getting-a-list-of-cities
 func (c *Client) GetCities(ctx context.Context, countryCode, isp, regionID string) ([]string, error) {
 	req, err := c.newRequest(ctx, "/api/get-country-cities", map[string]string{
-		"country_iso": countryCode,
+		"country_iso": strings.ToLower(countryCode),
 		"conn_type":   string(c.ConnType),
 		"provider":    isp,
 		"region":      regionID,
