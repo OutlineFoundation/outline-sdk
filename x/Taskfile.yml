@@ -3,7 +3,7 @@ version: '3'
 vars:
   OUTPUT_DIR: 'out'
 
-  MOBILEPROXY_MODULE: github.com/Jigsaw-Code/outline-sdk/x/mobileproxy
+  MOBILEPROXY_MODULE: golang.getoutline.org/sdk/x/mobileproxy
   MOBILEPROXY_ARTIFACT_DIR: '{{.OUTPUT_DIR}}/mobileproxy'
   MOBILEPROXY_BUILD_TOOLS_DIR: '{{.OUTPUT_DIR}}/mobileproxy_build_tools'
 

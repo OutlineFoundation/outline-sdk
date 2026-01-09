@@ -4,8 +4,8 @@ This folder has a graphical application that runs a local proxy given a address 
 It uses [Fyne](https://fyne.io/) for the UI.
 
 
-<img width="231" alt="image" src="https://github.com/Jigsaw-Code/outline-sdk/assets/113565/5d985cb6-3df7-4781-88b0-29f62b22d6d9">
-<img width="231" alt="image" src="https://github.com/Jigsaw-Code/outline-sdk/assets/113565/396390ab-4c47-4da9-a544-68645b28e45a">
+<img width="231" alt="image" src="https://github.com/OutlineFoundation/outline-sdk/assets/113565/5d985cb6-3df7-4781-88b0-29f62b22d6d9">
+<img width="231" alt="image" src="https://github.com/OutlineFoundation/outline-sdk/assets/113565/396390ab-4c47-4da9-a544-68645b28e45a">
 
 You can configure your system to use the proxy, as per the instructions below:
 
