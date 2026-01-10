@@ -66,6 +66,8 @@ func RegisterDefaultProviders(c *ProviderContainer) *ProviderContainer {
 	registerWebsocketStreamDialer(&c.StreamDialers, "ws", c.StreamDialers.NewInstance)
 	registerWebsocketPacketDialer(&c.PacketDialers, "ws", c.StreamDialers.NewInstance)
 
+	registerWaitStreamDialer(&c.StreamDialers, "waitstream", c.StreamDialers.NewInstance)
+
 	return c
 }
 
