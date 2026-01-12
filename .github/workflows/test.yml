@@ -85,7 +85,7 @@ jobs:
           java-version: "17"
 
       # Free up disk space to avoid "Not enough space to create userdata partition" error.
-      # See https://github.com/Jigsaw-Code/outline-sdk/actions/runs/20183073943/job/58094204027?pr=556#step:7:98
+      # See https://github.com/OutlineFoundation/outline-sdk/actions/runs/20183073943/job/58094204027?pr=556#step:7:98
       - name: Free up disk space
         run: |
           sudo rm -rf /usr/share/dotnet

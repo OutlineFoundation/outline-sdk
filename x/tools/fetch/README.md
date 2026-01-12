@@ -56,7 +56,7 @@ $ go run golang.getoutline.org/sdk/x/tools/fetch@latest -transport split:3  http
 
 You should see this on Wireshark:
 
-<img width="652" alt="image" src="https://github.com/Jigsaw-Code/outline-sdk/assets/113565/9c19667d-d0fb-4d33-b0a6-275674481dce">
+<img width="652" alt="image" src="https://github.com/OutlineFoundation/outline-sdk/assets/113565/9c19667d-d0fb-4d33-b0a6-275674481dce">
 
 ## Using ECH
 

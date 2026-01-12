@@ -52,7 +52,7 @@ The response is sent over TLS, which implements forward-secrecy.
 
 [SOCKS5]: https://datatracker.ietf.org/doc/html/rfc1928
 [Outline Manager app]: https://getoutline.org/get-started/#step-1
-[outline-ss-server]: https://github.com/Jigsaw-Code/outline-ss-server?tab=readme-ov-file#how-to-run-it
+[outline-ss-server]: https://github.com/OutlineFoundation/tunnel-server?tab=readme-ov-file#how-to-run-it
 [Encrypted transport]: https://shadowsocks.org/doc/aead.html
 [Proxy protocol]: https://shadowsocks.org/doc/what-is-shadowsocks.html
 [stream ciphers]: https://shadowsocks.org/doc/stream.html
