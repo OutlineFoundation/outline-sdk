@@ -76,7 +76,7 @@ tcp:
 
 *   The `tls` field specifies a list of TLS transports to test.
 *   Each TLS transport is a string that specifies the transport to use.
-*   For example, `override:host=cloudflare.net|tlsfrag:1` specifies a transport that uses domain fronting with Cloudflare and TLS fragmentation. See the [config documentation](https://pkg.go.dev/github.com/Jigsaw-Code/outline-sdk/x/configurl#hdr-Config_Format) for details.
+*   For example, `override:host=cloudflare.net|tlsfrag:1` specifies a transport that uses domain fronting with Cloudflare and TLS fragmentation. See the [config documentation](https://pkg.go.dev/golang.getoutline.org/sdk/x/configurl#hdr-Configuration_Format) for details.
 
 ### Fallback Configuration
 
@@ -84,7 +84,7 @@ A fallback configuration is used if none of the proxyless strategies are able to
 
 The fallback strings should be:
 
-*   A valid StreamDialer config string as defined in [configurl](https://pkg.go.dev/github.com/Jigsaw-Code/outline-sdk/x/configurl#hdr-Proxy_Protocols)
+*   A valid StreamDialer config string as defined in [configurl](https://pkg.go.dev/golang.getoutline.org/sdk/x/configurl#hdr-Proxy_Protocols)
 *   A valid Psiphon configuration object as a child of a `psiphon` field.
 
 #### Shadowsocks server example
@@ -104,7 +104,7 @@ fallback:
 #### Psiphon config example
 
 > [!WARNING]
-> The Psiphon library is not included in the build by default because the Psiphon codebase uses GPL. To support Psiphon configuration please build using the [`psiphon` build tag](https://pkg.go.dev/github.com/Jigsaw-Code/outline-sdk/x/psiphon).
+> The Psiphon library is not included in the build by default because the Psiphon codebase uses GPL. To support Psiphon configuration please build using the [`psiphon` build tag](https://pkg.go.dev/golang.getoutline.org/sdk/x/psiphon).
 > When integrating Psiphon into your application please work with the Psiphon team at sponsor@psiphon.ca
 
 JSON is a subset of YAML. If you have an existing psiphon JSON configuration file you can simply copy-and-paste it into your smart-proxy config.yaml file like so:

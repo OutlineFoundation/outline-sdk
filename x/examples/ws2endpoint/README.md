@@ -71,7 +71,7 @@ if you would like to prevent unauthorized access to your service.
 Run the reverse proxy, pointing to your Outline Server:
 
 ```sh
-go run github.com/Jigsaw-Code/outline-sdk/x/examples/ws2endpoint --backend $HOST:$PORT --listen 127.0.0.1:8080
+go run golang.getoutline.org/sdk/x/examples/ws2endpoint --backend $HOST:$PORT --listen 127.0.0.1:8080
 ```
 
 Expose the endpoint on Cloudflare:
@@ -83,7 +83,7 @@ cloudflared tunnel --url http://localhost:8080
 Connect to the Cloudflare domain. For example:
 
 ```sh
-go run github.com/Jigsaw-Code/outline-sdk/tools/fetch \
+go run golang.getoutline.org/sdk/x/tools/fetch \
   -transport "tls|ws:tcp_path=/tcp|ss://${REDACTED}@prefix-marion-covered-operators.trycloudflare.com.trycloudflare.com:443" \
   https://ipinfo.io/
 ```
@@ -91,7 +91,7 @@ go run github.com/Jigsaw-Code/outline-sdk/tools/fetch \
 You can use override to make it easier to insert an Outline key:
 
 ```sh
-go run github.com/Jigsaw-Code/outline-sdk/tools/fetch \
+go run golang.getoutline.org/sdk/x/tools/fetch \
   -transport "tls|ws:tcp_path=/tcp|override:host=prefix-marion-covered-operators.trycloudflare.com&port=443|$OUTLINE_KEY" \
   https://ipinfo.io/
 ```
@@ -99,7 +99,7 @@ go run github.com/Jigsaw-Code/outline-sdk/tools/fetch \
 It's possible to bypass DNS-based blocking by resolving `cloudflare.net`, and SNI-based blocking by using TLS Record Fragmentation:
 
 ```sh
-go run github.com/Jigsaw-Code/outline-sdk/tools/fetch \
+go run golang.getoutline.org/sdk/x/tools/fetch \
   -transport "override:host=cloudflare.net|tlsfrag:1|tls|ws:tcp_path=/tcp|ss://${REDACTED}@prefix-marion-covered-operators.trycloudflare.com:443" \
   https://ipinfo.io/
 ```
@@ -107,7 +107,7 @@ go run github.com/Jigsaw-Code/outline-sdk/tools/fetch \
 The WebSockets transport supports UDP as well:
 
 ```sh
-go run github.com/Jigsaw-Code/outline-sdk/tools/resolve \
+go run golang.getoutline.org/sdk/x/tools/resolve \
   -transport "tls|ws:tcp_path=/tcp&udp_path=/udp|ss://${REDACTED}@prefix-marion-covered-operators.trycloudflare.com:443"
   -resolver 8.8.8.8 \
   getoutline.org

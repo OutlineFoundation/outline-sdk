@@ -5,7 +5,7 @@ This app illustrates how to use different transports to fetch a URL in Go.
 Direct fetch:
 
 ```sh
-$ go run github.com/Jigsaw-Code/outline-sdk/x/tools/fetch@latest https://ipinfo.io
+$ go run golang.getoutline.org/sdk/x/tools/fetch@latest https://ipinfo.io
 {
   ...
   "city": "Amsterdam",
@@ -18,7 +18,7 @@ $ go run github.com/Jigsaw-Code/outline-sdk/x/tools/fetch@latest https://ipinfo.
 Using a Shadowsocks server:
 
 ```sh
-$ go run github.com/Jigsaw-Code/outline-sdk/x/tools/fetch@latest -transport ss://[redacted]@[redacted]:80 https://ipinfo.io
+$ go run golang.getoutline.org/sdk/x/tools/fetch@latest -transport ss://[redacted]@[redacted]:80 https://ipinfo.io
 {
   ...
   "region": "New Jersey",
@@ -31,7 +31,7 @@ $ go run github.com/Jigsaw-Code/outline-sdk/x/tools/fetch@latest -transport ss:/
 Using a SOCKS5 server:
 
 ```sh
-$ go run github.com/Jigsaw-Code/outline-sdk/x/tools/fetch@latest -transport socks5://[redacted]:5703 https://ipinfo.io
+$ go run golang.getoutline.org/sdk/x/tools/fetch@latest -transport socks5://[redacted]:5703 https://ipinfo.io
 {
   ... 
   "city": "Berlin",
@@ -44,7 +44,7 @@ $ go run github.com/Jigsaw-Code/outline-sdk/x/tools/fetch@latest -transport sock
 Using packet splitting:
 
 ```sh
-$ go run github.com/Jigsaw-Code/outline-sdk/x/tools/fetch@latest -transport split:3  https://ipinfo.io
+$ go run golang.getoutline.org/sdk/x/tools/fetch@latest -transport split:3  https://ipinfo.io
 {
   ...
   "city": "Amsterdam",
@@ -63,12 +63,12 @@ You should see this on Wireshark:
 Pass the `-ech-config` flag with the base64-encoded ECH Config in binary format (as per the standard proposal).
 
 ```console
-$ go run github.com/Jigsaw-Code/outline-sdk/x/tools/fetch@latest 'https://test.defo.ie/echstat.php?format=json'
+$ go run golang.getoutline.org/sdk/x/tools/fetch@latest 'https://test.defo.ie/echstat.php?format=json'
 {"SSL_ECH_OUTER_SNI": "NONE","SSL_ECH_INNER_SNI": "NONE","SSL_ECH_STATUS": "not attempted","date": "2025-09-05T14:26:43+00:00","config": "min-ng.test.defo.ie"}
 
 $ dig +short test.defo.ie HTTPS
 1 . ech=AEb+DQBCqQAgACBlm7cfDx/gKuUAwRTe+Y9MExbIyuLpLcgTORIdi69uewAEAAEAAQATcHVibGljLnRlc3QuZGVmby5pZQAA
 
-$ go run github.com/Jigsaw-Code/outline-sdk/x/tools/fetch@latest --ech-config=AEb+DQBCqQAgACBlm7cfDx/gKuUAwRTe+Y9MExbIyuLpLcgTORIdi69uewAEAAEAAQATcHVibGljLnRlc3QuZGVmby5pZQAA 'https://test.defo.ie/echstat.php?format=json'
+$ go run golang.getoutline.org/sdk/x/tools/fetch@latest --ech-config=AEb+DQBCqQAgACBlm7cfDx/gKuUAwRTe+Y9MExbIyuLpLcgTORIdi69uewAEAAEAAQATcHVibGljLnRlc3QuZGVmby5pZQAA 'https://test.defo.ie/echstat.php?format=json'
 {"SSL_ECH_OUTER_SNI": "public.test.defo.ie","SSL_ECH_INNER_SNI": "test.defo.ie","SSL_ECH_STATUS": "success", "date": "2025-09-05T14:22:52+00:00","config": "min-ng.test.defo.ie"}
 ```

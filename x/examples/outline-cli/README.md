@@ -5,7 +5,7 @@ A CLI interface of Outline VPN client for Linux.
 ### Usage
 
 ```
-go run github.com/Jigsaw-Code/outline-sdk/x/examples/outline-cli@latest -transport "ss://<outline-server-access-key>"
+go run golang.getoutline.org/sdk/x/examples/outline-cli@latest -transport "ss://<outline-server-access-key>"
 ```
 
 - `-transport` : the Outline server access key from the service provider, it should start with "ss://"
