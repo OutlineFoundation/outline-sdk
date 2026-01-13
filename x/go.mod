@@ -7,6 +7,9 @@ toolchain go1.24.8
 // Due to https://github.com/OutlineFoundation/outline-sdk/issues/501
 retract [v0.0.4, v0.0.6]
 
+// This version is poisoned by incorrect proxy caching due to misconfigured vanity import paths.
+retract v0.0.9
+
 require (
 	// Use github.com/Psiphon-Labs/psiphon-tunnel-core@staging-client as per
 	// https://github.com/Psiphon-Labs/psiphon-tunnel-core/?tab=readme-ov-file#using-psiphon-with-go-modules
