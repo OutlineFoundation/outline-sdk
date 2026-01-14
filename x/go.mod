@@ -7,6 +7,9 @@ toolchain go1.24.8
 // Due to https://github.com/OutlineFoundation/outline-sdk/issues/501
 retract [v0.0.4, v0.0.6]
 
+// These versions are poisoned by incorrect proxy caching due to misconfigured vanity import paths.
+retract [v0.0.9, v0.0.21]
+
 require (
 	// Use github.com/Psiphon-Labs/psiphon-tunnel-core@staging-client as per
 	// https://github.com/Psiphon-Labs/psiphon-tunnel-core/?tab=readme-ov-file#using-psiphon-with-go-modules
@@ -19,7 +22,7 @@ require (
 	github.com/stretchr/testify v1.9.0
 	github.com/things-go/go-socks5 v0.0.5
 	github.com/vishvananda/netlink v1.2.1-beta.2
-	golang.getoutline.org/sdk v0.0.21-alpha.1
+	golang.getoutline.org/sdk v0.0.21
 	golang.org/x/mobile v0.0.0-20240520174638-fa72addaaa1b
 	golang.org/x/net v0.44.0
 	golang.org/x/sys v0.36.0

@@ -305,8 +305,8 @@ go4.org/mem v0.0.0-20220726221520-4f986261bf13 h1:CbZeCBZ0aZj8EfVgnqQcYZgf0lpZ3H
 go4.org/mem v0.0.0-20220726221520-4f986261bf13/go.mod h1:reUoABIJ9ikfM5sgtSF3Wushcza7+WeD01VB9Lirh3g=
 go4.org/netipx v0.0.0-20230824141953-6213f710f925 h1:eeQDDVKFkx0g4Hyy8pHgmZaK0EqB4SD6rvKbUdN3ziQ=
 go4.org/netipx v0.0.0-20230824141953-6213f710f925/go.mod h1:PLyyIXexvUFg3Owu6p/WfdlivPbZJsZdgWZlrGope/Y=
-golang.getoutline.org/sdk v0.0.21-alpha.1 h1:ikq5Kh5eqzRsxd7CSGvN5lSCkDi1Dfb/camf23A1CWI=
-golang.getoutline.org/sdk v0.0.21-alpha.1/go.mod h1:raUAs4PYbEaT/cLTK6PviiKSh7gjEj7JJczFFFr41zc=
+golang.getoutline.org/sdk v0.0.21 h1:zgtenz5DMbnIPOsuAOHNiWdrri81fHyBxhSfRi6Dk8s=
+golang.getoutline.org/sdk v0.0.21/go.mod h1:raUAs4PYbEaT/cLTK6PviiKSh7gjEj7JJczFFFr41zc=
 golang.org/x/crypto v0.0.0-20190308221718-c2843e01d9a2/go.mod h1:djNgcEr1/C05ACkg1iLfiJU5Ep61QUkGW8qpdssI0+w=
 golang.org/x/crypto v0.0.0-20210220033148-5ea612d1eb83/go.mod h1:jdWPYTVW3xRLrWPugEBEK3UY2ZEsg3UU495nc5E+M+I=
 golang.org/x/crypto v0.0.0-20210322153248-0c34fe9e7dc2/go.mod h1:T9bdIzuCu7OtxOm1hfPfRQxPLYneinmdGuTeoZ9dtd4=
