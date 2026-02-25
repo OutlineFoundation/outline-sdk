@@ -27,11 +27,11 @@ import (
 // ConnectClient is a [transport.StreamDialer] that establishes an HTTP CONNECT tunnel over an abstract HTTP transport.
 //
 // The package also includes transport builders:
-// - NewHTTPProxyTransport
-// - NewHTTP3ProxyTransport
+// [NewHTTPProxyTransport],
+// [NewHTTP3ProxyTransport].
 //
 // Options:
-// - WithHeaders appends the provided headers to every CONNECT request.
+// [WithHeaders] appends the provided headers to every CONNECT request.
 type ConnectClient struct {
 	proxyRT ProxyRoundTripper
 	headers http.Header

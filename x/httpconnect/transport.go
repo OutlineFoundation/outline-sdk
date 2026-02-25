@@ -22,10 +22,10 @@ import (
 	"net"
 	"net/http"
 
-	"golang.getoutline.org/sdk/transport"
-	"golang.getoutline.org/sdk/transport/tls"
 	"github.com/quic-go/quic-go"
 	"github.com/quic-go/quic-go/http3"
+	"golang.getoutline.org/sdk/transport"
+	"golang.getoutline.org/sdk/transport/tls"
 	"golang.org/x/net/http2"
 )
 
@@ -51,7 +51,7 @@ func WithPlainHTTP() TransportOption {
 // The proxy address must be in the form "host:port".
 //
 // For HTTP/1 (plain and over TLS) and HTTP/2 (over TLS) over a stream connection.
-// When using TLS, pass WithTLSOptions(tls.WithALPN()) to enable or enforce HTTP/2.
+// When using TLS, pass [WithTLSOptions] with [tls.WithALPN] to enable or enforce HTTP/2.
 func NewHTTPProxyTransport(dialer transport.StreamDialer, proxyAddr string, opts ...TransportOption) (ProxyRoundTripper, error) {
 	if dialer == nil {
 		return nil, errors.New("dialer must not be nil")
@@ -64,9 +64,9 @@ func NewHTTPProxyTransport(dialer transport.StreamDialer, proxyAddr string, opts
 	cfg := &transportConfig{}
 	cfg.applyOptions(opts...)
 
-	tlsCfg := tls.ClientConfig{ServerName: host}
+	tlsCfg := &tls.ClientConfig{ServerName: host}
 	for _, opt := range cfg.tlsOptions {
-		opt(host, &tlsCfg)
+		opt(host, tlsCfg)
 	}
 
 	tr := &http.Transport{
@@ -80,7 +80,7 @@ func NewHTTPProxyTransport(dialer transport.StreamDialer, proxyAddr string, opts
 	}
 
 	// TLS config must be applied AFTER http2.ConfigureTransport, as it appends h2 to the list of supported protocols.
-	tr.TLSClientConfig = toStdConfig(tlsCfg)
+	tr.TLSClientConfig = tls.ToGoTLSConfig(tlsCfg)
 
 	sch := schemeHTTPS
 	if cfg.plainHTTP {
@@ -110,9 +110,9 @@ func NewHTTP3ProxyTransport(conn net.PacketConn, proxyAddr string, opts ...Trans
 	cfg := &transportConfig{}
 	cfg.applyOptions(opts...)
 
-	tlsConfig := tls.ClientConfig{ServerName: host}
+	tlsConfig := &tls.ClientConfig{ServerName: host}
 	for _, opt := range cfg.tlsOptions {
-		opt(host, &tlsConfig)
+		opt(host, tlsConfig)
 	}
 
 	tr := &http3.Transport{
@@ -124,7 +124,7 @@ func NewHTTP3ProxyTransport(conn net.PacketConn, proxyAddr string, opts ...Trans
 
 			return quic.DialEarly(ctx, conn, parsedProxyAddr, tlsCfg, quicCfg)
 		},
-		TLSClientConfig: toStdConfig(tlsConfig),
+		TLSClientConfig: tls.ToGoTLSConfig(tlsConfig),
 	}
 
 	return proxyRT{
@@ -158,22 +158,4 @@ type proxyRT struct {
 
 func (rt proxyRT) Scheme() string {
 	return string(rt.scheme)
-}
-
-// TODO: Replace with tls.ToGoTLSConfig call once outline-sdk dependency version for this module is bumped.
-// It is basically a copy of the implementation ToGoTLSConfig
-func toStdConfig(cfg tls.ClientConfig) *stdTLS.Config {
-	return &stdTLS.Config{
-		ServerName:         cfg.ServerName,
-		NextProtos:         cfg.NextProtos,
-		ClientSessionCache: cfg.SessionCache,
-		// Set InsecureSkipVerify to skip the default validation we are
-		// replacing. This will not disable VerifyConnection.
-		InsecureSkipVerify: true,
-		VerifyConnection: func(cs stdTLS.ConnectionState) error {
-			return cfg.CertVerifier.VerifyCertificate(&tls.CertVerificationContext{
-				PeerCertificates: cs.PeerCertificates,
-			})
-		},
-	}
 }
