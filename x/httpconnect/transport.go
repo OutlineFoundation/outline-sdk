@@ -93,6 +93,71 @@ func NewHTTPProxyTransport(dialer transport.StreamDialer, proxyAddr string, opts
 	}, nil
 }
 
+// NewH2ProxyTransport creates a pure HTTP/2 transport that establishes a connection to the proxy
+// using the given [transport.StreamDialer].
+// The proxy address must be in the form "host:port".
+//
+// Unlike [NewHTTPProxyTransport], this uses [golang.org/x/net/http2.Transport] directly, enabling:
+//   - h2c (cleartext HTTP/2 via prior knowledge) with [WithPlainHTTP] — no TLS required
+//   - Pure H2 from byte 1: multiple concurrent CONNECT tunnels share one TCP connection
+func NewH2ProxyTransport(dialer transport.StreamDialer, proxyAddr string, opts ...TransportOption) (ProxyRoundTripper, error) {
+	if dialer == nil {
+		return nil, errors.New("dialer must not be nil")
+	}
+	host, _, err := net.SplitHostPort(proxyAddr)
+	if err != nil {
+		return nil, fmt.Errorf("failed to parse proxy address %s: %w", proxyAddr, err)
+	}
+
+	cfg := &transportConfig{}
+	cfg.applyOptions(opts...)
+
+	var tr *http2.Transport
+	if cfg.plainHTTP {
+		tr = &http2.Transport{
+			AllowHTTP: true,
+			// DialTLSContext is used even for plaintext when AllowHTTP is true.
+			DialTLSContext: func(ctx context.Context, _, _ string, _ *stdTLS.Config) (net.Conn, error) {
+				return dialer.DialStream(ctx, proxyAddr)
+			},
+		}
+	} else {
+		tlsCfg := tls.ClientConfig{ServerName: host}
+		for _, opt := range cfg.tlsOptions {
+			opt(host, &tlsCfg)
+		}
+		stdCfg := toStdConfig(tlsCfg)
+		// Ensure "h2" is in ALPN NextProtos so the server negotiates HTTP/2.
+		stdCfg.NextProtos = append([]string{"h2"}, stdCfg.NextProtos...)
+		tr = &http2.Transport{
+			// http2.Transport type-asserts to *tls.Conn to read NegotiatedProtocol,
+			// so we must return *stdTLS.Conn directly — not an sdk tls.WrapConn wrapper.
+			DialTLSContext: func(ctx context.Context, _, _ string, _ *stdTLS.Config) (net.Conn, error) {
+				conn, err := dialer.DialStream(ctx, proxyAddr)
+				if err != nil {
+					return nil, err
+				}
+				tlsConn := stdTLS.Client(conn, stdCfg)
+				if err := tlsConn.HandshakeContext(ctx); err != nil {
+					conn.Close()
+					return nil, err
+				}
+				return tlsConn, nil
+			},
+		}
+	}
+
+	sch := schemeHTTPS
+	if cfg.plainHTTP {
+		sch = schemeHTTP
+	}
+
+	return proxyRT{
+		RoundTripper: tr,
+		scheme:       sch,
+	}, nil
+}
+
 // NewHTTP3ProxyTransport creates an HTTP/3 transport that establishes a QUIC connection to the proxy using the given [net.PacketConn].
 // The proxy address must be in the form "host:port".
 //

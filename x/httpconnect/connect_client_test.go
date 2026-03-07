@@ -38,6 +38,7 @@ import (
 	"golang.getoutline.org/sdk/transport/tls"
 	"github.com/quic-go/quic-go/http3"
 	"github.com/stretchr/testify/require"
+	"golang.org/x/net/http2"
 
 	"golang.getoutline.org/sdk/x/httpproxy"
 )
@@ -219,6 +220,64 @@ func Test_NewConnectClient_Ok(t *testing.T) {
 				return connClient, proxySrv.Close
 			},
 			wantErr: "tls: no application protocol",
+		},
+		{
+			name: "ok. H2C (cleartext H2, prior knowledge)",
+			prepareDialer: func(t *testing.T) (transport.StreamDialer, closeFunc) {
+				ln, err := net.Listen("tcp", "127.0.0.1:0")
+				require.NoError(t, err, "Listen")
+
+				h2srv := &http2.Server{}
+				h2Handler := http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+					require.Equal(t, "HTTP/2.0", request.Proto, "Proto")
+					require.Equal(t, http.MethodConnect, request.Method, "Method")
+
+					conn, err := net.Dial("tcp", request.URL.Host)
+					require.NoError(t, err, "Dial")
+					defer conn.Close()
+
+					writer.WriteHeader(http.StatusOK)
+					writer.(http.Flusher).Flush()
+
+					wg := &sync.WaitGroup{}
+
+					wg.Add(1)
+					go func() {
+						defer wg.Done()
+						io.Copy(conn, request.Body)
+					}()
+
+					wg.Add(1)
+					go func() {
+						defer wg.Done()
+						fw := &flusherWriter{
+							Flusher: writer.(http.Flusher),
+							Writer:  writer,
+						}
+						fw.ReadFrom(conn)
+					}()
+
+					wg.Wait()
+				})
+
+				go func() {
+					for {
+						conn, err := ln.Accept()
+						if err != nil {
+							return
+						}
+						go h2srv.ServeConn(conn, &http2.ServeConnOpts{Handler: h2Handler})
+					}
+				}()
+
+				tr, err := NewH2ProxyTransport(tcpDialer, ln.Addr().String(), WithPlainHTTP())
+				require.NoError(t, err, "NewH2ProxyTransport")
+
+				connClient, err := NewConnectClient(tr)
+				require.NoError(t, err, "NewConnectClient")
+
+				return connClient, func() { ln.Close() }
+			},
 		},
 		{
 			name: "ok. HTTP/3 over QUIC with TLS",
