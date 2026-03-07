@@ -16,33 +16,401 @@ package httpconnect
 
 import (
 	"context"
-	"crypto/rand"
-	"crypto/rsa"
 	stdTLS "crypto/tls"
 	"crypto/x509"
-	"crypto/x509/pkix"
 	"encoding/base64"
 	"encoding/json"
-	"encoding/pem"
 	"io"
-	"math/big"
 	"net"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
 	"sync"
 	"testing"
-	"time"
 
-	"golang.getoutline.org/sdk/transport"
-	"golang.getoutline.org/sdk/transport/tls"
 	"github.com/quic-go/quic-go/http3"
 	"github.com/stretchr/testify/require"
+	"golang.getoutline.org/sdk/transport"
+	"golang.getoutline.org/sdk/transport/tls"
 	"golang.org/x/net/http2"
 
 	"golang.getoutline.org/sdk/x/httpproxy"
 )
 
+// Compile-time check: net.Conn satisfies io.ReadWriteCloser.
+var _ io.ReadWriteCloser = (net.Conn)(nil)
+
+// tlsCertPool returns the built-in httptest TLS certificate and a cert pool trusting it.
+// Reusing httptest's certificate avoids generating a custom CA in each test.
+func tlsCertPool(t *testing.T) (stdTLS.Certificate, *x509.CertPool) {
+	t.Helper()
+	// Create a throwaway server solely to borrow its built-in TLS cert material.
+	srv := httptest.NewTLSServer(nil)
+	srv.Close()
+	pool := x509.NewCertPool()
+	pool.AddCert(srv.Certificate())
+	return srv.TLS.Certificates[0], pool
+}
+
+// verifyTunnel sends an HTTP GET through the given dialer to a local target server
+// and asserts the response is received correctly end-to-end.
+func verifyTunnel(t *testing.T, dialer transport.StreamDialer) {
+	t.Helper()
+
+	type Response struct {
+		Message string `json:"message"`
+	}
+	want := Response{Message: "hello"}
+
+	targetSrv := newTargetSrv(t, want)
+	t.Cleanup(targetSrv.Close)
+
+	hc := &http.Client{
+		Transport: &http.Transport{
+			DialContext: func(ctx context.Context, _, addr string) (net.Conn, error) {
+				conn, err := dialer.DialStream(ctx, addr)
+				if err != nil {
+					return nil, err
+				}
+				require.Equal(t, addr, conn.RemoteAddr().String())
+				return conn, nil
+			},
+		},
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, targetSrv.URL, nil)
+	require.NoError(t, err)
+	req.Close = true // close the tunnel right after the request
+
+	resp, err := hc.Do(req)
+	require.NoError(t, err)
+	t.Cleanup(func() { resp.Body.Close() })
+
+	require.Equal(t, http.StatusOK, resp.StatusCode)
+
+	var got Response
+	require.NoError(t, json.NewDecoder(resp.Body).Decode(&got))
+	require.Equal(t, want, got)
+}
+
+// newH2ConnectHandler returns an http.Handler that handles HTTP/2 CONNECT requests
+// by dialing the target and relaying data in both directions.
+//
+// H2 does not support connection hijacking, so this handler uses the response writer
+// as a bidirectional stream with explicit flushing.
+func newH2ConnectHandler(t *testing.T) http.Handler {
+	t.Helper()
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		require.Equal(t, "HTTP/2.0", r.Proto, "Proto")
+		require.Equal(t, http.MethodConnect, r.Method, "Method")
+
+		conn, err := net.Dial("tcp", r.URL.Host)
+		require.NoError(t, err, "Dial")
+		defer conn.Close()
+
+		w.WriteHeader(http.StatusOK)
+		w.(http.Flusher).Flush()
+
+		var wg sync.WaitGroup
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			io.Copy(conn, r.Body)
+		}()
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			// io.Copy doesn't flush, so use flusherWriter to flush after each write.
+			fw := &flusherWriter{Flusher: w.(http.Flusher), Writer: w}
+			fw.ReadFrom(conn)
+		}()
+		wg.Wait()
+	})
+}
+
+// Test_ConnectClient_H1_Plain verifies that custom headers (e.g. Proxy-Authorization)
+// are forwarded on every CONNECT request when using a plain HTTP/1.1 proxy.
+func Test_ConnectClient_H1_Plain(t *testing.T) {
+	t.Parallel()
+
+	tcpDialer := &transport.TCPDialer{}
+	creds := base64.StdEncoding.EncodeToString([]byte("username:password"))
+
+	proxySrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		require.Equal(t, "Basic "+creds, r.Header.Get("Proxy-Authorization"))
+		httpproxy.NewConnectHandler(tcpDialer).ServeHTTP(w, r)
+	}))
+	t.Cleanup(proxySrv.Close)
+
+	proxyURL, err := url.Parse(proxySrv.URL)
+	require.NoError(t, err, "Parse")
+
+	tr, err := NewHTTPProxyTransport(tcpDialer, proxyURL.Host, WithPlainHTTP())
+	require.NoError(t, err, "NewHTTPProxyTransport")
+
+	connClient, err := NewConnectClient(tr, WithHeaders(http.Header{
+		"Proxy-Authorization": []string{"Basic " + creds},
+	}))
+	require.NoError(t, err, "NewConnectClient")
+
+	verifyTunnel(t, connClient)
+}
+
+// Test_ConnectClient_H1_TLS verifies end-to-end tunneling over a TLS-wrapped HTTP/1.1 proxy.
+func Test_ConnectClient_H1_TLS(t *testing.T) {
+	t.Parallel()
+
+	tcpDialer := &transport.TCPDialer{}
+
+	proxySrv := httptest.NewUnstartedServer(httpproxy.NewConnectHandler(tcpDialer))
+	proxySrv.StartTLS()
+	t.Cleanup(proxySrv.Close)
+
+	certPool := x509.NewCertPool()
+	certPool.AddCert(proxySrv.Certificate())
+
+	proxyURL, err := url.Parse(proxySrv.URL)
+	require.NoError(t, err, "Parse")
+
+	tr, err := NewHTTPProxyTransport(tcpDialer, proxyURL.Host,
+		WithTLSOptions(tls.WithCertVerifier(&tls.StandardCertVerifier{Roots: certPool})),
+	)
+	require.NoError(t, err, "NewHTTPProxyTransport")
+
+	connClient, err := NewConnectClient(tr)
+	require.NoError(t, err, "NewConnectClient")
+
+	verifyTunnel(t, connClient)
+}
+
+// Test_ConnectClient_H2_TLS verifies tunneling over HTTP/2 when ALPN negotiation selects h2.
+// Uses NewHTTPProxyTransport, which adds H2 support on top of net/http.Transport via ALPN.
+func Test_ConnectClient_H2_TLS(t *testing.T) {
+	t.Parallel()
+
+	tcpDialer := &transport.TCPDialer{}
+
+	proxySrv := httptest.NewUnstartedServer(newH2ConnectHandler(t))
+	proxySrv.EnableHTTP2 = true
+	proxySrv.StartTLS()
+	t.Cleanup(proxySrv.Close)
+
+	certPool := x509.NewCertPool()
+	certPool.AddCert(proxySrv.Certificate())
+
+	proxyURL, err := url.Parse(proxySrv.URL)
+	require.NoError(t, err, "Parse")
+
+	tr, err := NewHTTPProxyTransport(tcpDialer, proxyURL.Host,
+		WithTLSOptions(
+			tls.WithCertVerifier(&tls.StandardCertVerifier{Roots: certPool}),
+			tls.WithALPN([]string{"h2"}),
+		),
+	)
+	require.NoError(t, err, "NewHTTPProxyTransport")
+
+	connClient, err := NewConnectClient(tr)
+	require.NoError(t, err, "NewConnectClient")
+
+	verifyTunnel(t, connClient)
+}
+
+// Test_ConnectClient_H2_TLS_AlpnFails verifies that when the client enforces H2 via ALPN
+// but the server only supports H1, the TLS handshake fails with a clear protocol error.
+func Test_ConnectClient_H2_TLS_AlpnFails(t *testing.T) {
+	t.Parallel()
+
+	tcpDialer := &transport.TCPDialer{}
+
+	// H1-only server: no EnableHTTP2.
+	proxySrv := httptest.NewUnstartedServer(httpproxy.NewConnectHandler(tcpDialer))
+	proxySrv.StartTLS()
+	t.Cleanup(proxySrv.Close)
+
+	certPool := x509.NewCertPool()
+	certPool.AddCert(proxySrv.Certificate())
+
+	proxyURL, err := url.Parse(proxySrv.URL)
+	require.NoError(t, err, "Parse")
+
+	tr, err := NewHTTPProxyTransport(tcpDialer, proxyURL.Host,
+		WithTLSOptions(
+			tls.WithCertVerifier(&tls.StandardCertVerifier{Roots: certPool}),
+			tls.WithALPN([]string{"h2"}),
+		),
+	)
+	require.NoError(t, err, "NewHTTPProxyTransport")
+
+	connClient, err := NewConnectClient(tr)
+	require.NoError(t, err, "NewConnectClient")
+
+	_, err = connClient.DialStream(context.Background(), "127.0.0.1:1")
+	require.ErrorContains(t, err, "tls: no application protocol")
+}
+
+// Test_ConnectClient_H2C verifies tunneling over cleartext HTTP/2 (h2c) via prior knowledge.
+// Uses NewH2ProxyTransport with WithPlainHTTP(): no TLS, no HTTP upgrade — H2 from the first byte.
+func Test_ConnectClient_H2C(t *testing.T) {
+	t.Parallel()
+
+	tcpDialer := &transport.TCPDialer{}
+
+	// Serve H2 prior knowledge (no TLS, no upgrade) on a raw TCP listener.
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	require.NoError(t, err, "Listen")
+	t.Cleanup(func() { ln.Close() })
+
+	h2srv := &http2.Server{}
+	handler := newH2ConnectHandler(t)
+	go func() {
+		for {
+			conn, err := ln.Accept()
+			if err != nil {
+				return
+			}
+			go h2srv.ServeConn(conn, &http2.ServeConnOpts{Handler: handler})
+		}
+	}()
+
+	tr, err := NewH2ProxyTransport(tcpDialer, ln.Addr().String(), WithPlainHTTP())
+	require.NoError(t, err, "NewH2ProxyTransport")
+
+	connClient, err := NewConnectClient(tr)
+	require.NoError(t, err, "NewConnectClient")
+
+	verifyTunnel(t, connClient)
+}
+
+// Test_ConnectClient_H2_TLS_Multiplexed verifies that NewH2ProxyTransport uses a single
+// underlying TCP connection to the proxy for multiple concurrent CONNECT streams.
+func Test_ConnectClient_H2_TLS_Multiplexed(t *testing.T) {
+	t.Parallel()
+
+	tcpDialer := &transport.TCPDialer{}
+
+	proxySrv := httptest.NewUnstartedServer(newH2ConnectHandler(t))
+	proxySrv.EnableHTTP2 = true
+	proxySrv.StartTLS()
+	t.Cleanup(proxySrv.Close)
+
+	certPool := x509.NewCertPool()
+	certPool.AddCert(proxySrv.Certificate())
+
+	proxyURL, err := url.Parse(proxySrv.URL)
+	require.NoError(t, err, "Parse")
+
+	// Wrap the dialer to count how many TCP connections are opened to the proxy.
+	var mu sync.Mutex
+	var dialCount int
+	countingDialer := transport.FuncStreamDialer(func(ctx context.Context, addr string) (transport.StreamConn, error) {
+		mu.Lock()
+		dialCount++
+		mu.Unlock()
+		return tcpDialer.DialStream(ctx, addr)
+	})
+
+	tr, err := NewH2ProxyTransport(countingDialer, proxyURL.Host,
+		WithTLSOptions(tls.WithCertVerifier(&tls.StandardCertVerifier{Roots: certPool})),
+	)
+	require.NoError(t, err, "NewH2ProxyTransport")
+
+	connClient, err := NewConnectClient(tr)
+	require.NoError(t, err, "NewConnectClient")
+
+	// Open 3 concurrent tunnels and assert they all share 1 TCP connection to the proxy.
+	targetSrv := newTargetSrv(t, "ignored")
+	t.Cleanup(targetSrv.Close)
+	targetURL, err := url.Parse(targetSrv.URL)
+	require.NoError(t, err, "Parse")
+
+	var wg sync.WaitGroup
+	for range 3 {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			conn, err := connClient.DialStream(context.Background(), targetURL.Host)
+			require.NoError(t, err, "DialStream")
+			conn.Close()
+		}()
+	}
+	wg.Wait()
+
+	mu.Lock()
+	require.Equal(t, 1, dialCount, "expected all streams to share 1 TCP connection to proxy")
+	mu.Unlock()
+
+	verifyTunnel(t, connClient)
+}
+
+// Test_ConnectClient_H3_QUIC verifies tunneling over HTTP/3, where CONNECT streams
+// run over QUIC rather than TCP. Uses http3.HTTPStreamer to access the raw H3 stream.
+func Test_ConnectClient_H3_QUIC(t *testing.T) {
+	t.Parallel()
+
+	// http3.Server requires its own TLS config; borrow httptest's built-in cert.
+	tlsCert, certPool := tlsCertPool(t)
+
+	srvConn, err := net.ListenPacket("udp", "127.0.0.1:0")
+	require.NoError(t, err, "ListenPacket")
+
+	proxySrv := &http3.Server{
+		Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			require.Equal(t, "HTTP/3.0", r.Proto, "Proto")
+			require.Equal(t, http.MethodConnect, r.Method, "Method")
+
+			conn, err := net.Dial("tcp", r.URL.Host)
+			require.NoError(t, err, "Dial")
+			defer conn.Close()
+
+			w.WriteHeader(http.StatusOK)
+			w.(http.Flusher).Flush()
+
+			streamer, ok := w.(http3.HTTPStreamer)
+			require.True(t, ok, "expected http3.HTTPStreamer")
+			stream := streamer.HTTPStream()
+			defer stream.Close()
+
+			var wg sync.WaitGroup
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				io.Copy(stream, conn)
+			}()
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				io.Copy(conn, stream)
+			}()
+			wg.Wait()
+		}),
+		TLSConfig: &stdTLS.Config{Certificates: []stdTLS.Certificate{tlsCert}},
+	}
+	go func() { _ = proxySrv.Serve(srvConn) }()
+	t.Cleanup(func() {
+		_ = proxySrv.Close()
+		_ = srvConn.Close()
+	})
+
+	cliConn, err := net.ListenPacket("udp", "127.0.0.1:0")
+	require.NoError(t, err, "ListenPacket")
+	t.Cleanup(func() { _ = cliConn.Close() })
+
+	tr, err := NewHTTP3ProxyTransport(cliConn.(net.PacketConn), srvConn.LocalAddr().String(),
+		WithTLSOptions(tls.WithCertVerifier(&tls.StandardCertVerifier{Roots: certPool})),
+	)
+	require.NoError(t, err, "NewHTTP3ProxyTransport")
+
+	connClient, err := NewConnectClient(tr)
+	require.NoError(t, err, "NewConnectClient")
+
+	verifyTunnel(t, connClient)
+}
+
+// newTargetSrv starts a local HTTP server that responds to any request with resp serialized as JSON.
+// It represents the tunnel destination — the server the client reaches through the proxy.
 func newTargetSrv(t *testing.T, resp interface{}) *httptest.Server {
 	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
@@ -56,480 +424,9 @@ func newTargetSrv(t *testing.T, resp interface{}) *httptest.Server {
 	}))
 }
 
-func Test_NewConnectClient_Ok(t *testing.T) {
-	t.Parallel()
-
-	var _ io.ReadWriteCloser = (net.Conn)(nil)
-
-	tcpDialer := &transport.TCPDialer{}
-	h1ConnectHandler := httpproxy.NewConnectHandler(tcpDialer)
-
-	type closeFunc func()
-
-	type TestCase struct {
-		name          string
-		prepareDialer func(t *testing.T) (transport.StreamDialer, closeFunc)
-		wantErr       string
-	}
-
-	tests := []TestCase{
-		{
-			name: "ok. Plain HTTP/1 with headers",
-			prepareDialer: func(t *testing.T) (transport.StreamDialer, closeFunc) {
-				creds := base64.StdEncoding.EncodeToString([]byte("username:password"))
-
-				proxySrv := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
-					require.Equal(t, "Basic "+creds, request.Header.Get("Proxy-Authorization"))
-					h1ConnectHandler.ServeHTTP(writer, request)
-				}))
-
-				proxyURL, err := url.Parse(proxySrv.URL)
-				require.NoError(t, err, "Parse")
-
-				tr, err := NewHTTPProxyTransport(tcpDialer, proxyURL.Host, WithPlainHTTP())
-				require.NoError(t, err, "NewHTTPProxyTransport")
-
-				connClient, err := NewConnectClient(tr, WithHeaders(http.Header{
-					"Proxy-Authorization": []string{"Basic " + creds},
-				}))
-				require.NoError(t, err, "NewConnectClient")
-
-				return connClient, proxySrv.Close
-			},
-		},
-		{
-			name: "ok. HTTP/1.1 with TLS",
-			prepareDialer: func(t *testing.T) (transport.StreamDialer, closeFunc) {
-				proxySrv := httptest.NewUnstartedServer(h1ConnectHandler)
-
-				rootCA, key := generateRootCA(t)
-				proxySrv.TLS = &stdTLS.Config{Certificates: []stdTLS.Certificate{key}}
-				certPool := x509.NewCertPool()
-				certPool.AddCert(rootCA)
-
-				proxySrv.StartTLS()
-
-				proxyURL, err := url.Parse(proxySrv.URL)
-				require.NoError(t, err, "Parse")
-
-				tr, err := NewHTTPProxyTransport(
-					tcpDialer,
-					proxyURL.Host,
-					WithTLSOptions(tls.WithCertVerifier(&tls.StandardCertVerifier{Roots: certPool})),
-				)
-				require.NoError(t, err, "NewHTTPProxyTransport")
-
-				connClient, err := NewConnectClient(tr)
-				require.NoError(t, err, "NewConnectClient")
-
-				return connClient, proxySrv.Close
-			},
-		},
-		{
-			name: "ok. HTTP/2 with TLS",
-			prepareDialer: func(t *testing.T) (transport.StreamDialer, closeFunc) {
-				proxySrv := httptest.NewUnstartedServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
-					require.Equal(t, "HTTP/2.0", request.Proto, "Proto")
-					require.Equal(t, http.MethodConnect, request.Method, "Method")
-
-					conn, err := net.Dial("tcp", request.URL.Host)
-					require.NoError(t, err, "Dial")
-					defer conn.Close()
-
-					writer.WriteHeader(http.StatusOK)
-					writer.(http.Flusher).Flush()
-
-					wg := &sync.WaitGroup{}
-
-					wg.Add(1)
-					go func() {
-						defer wg.Done()
-						io.Copy(conn, request.Body)
-					}()
-
-					wg.Add(1)
-					go func() {
-						defer wg.Done()
-						// we can't use io.Copy, because it doesn't flush
-						fw := &flusherWriter{
-							Flusher: writer.(http.Flusher),
-							Writer:  writer,
-						}
-						fw.ReadFrom(conn)
-					}()
-
-					wg.Wait()
-				}))
-
-				rootCA, key := generateRootCA(t)
-				proxySrv.TLS = &stdTLS.Config{Certificates: []stdTLS.Certificate{key}}
-				certPool := x509.NewCertPool()
-				certPool.AddCert(rootCA)
-
-				proxySrv.EnableHTTP2 = true
-				proxySrv.StartTLS()
-
-				proxyURL, err := url.Parse(proxySrv.URL)
-				require.NoError(t, err, "Parse")
-
-				tr, err := NewHTTPProxyTransport(
-					tcpDialer,
-					proxyURL.Host,
-					WithTLSOptions(
-						tls.WithCertVerifier(&tls.StandardCertVerifier{Roots: certPool}),
-						tls.WithALPN([]string{"h2"}),
-					),
-				)
-				require.NoError(t, err, "NewHTTPProxyTransport")
-
-				connClient, err := NewConnectClient(tr)
-				require.NoError(t, err, "NewConnectClient")
-
-				return connClient, proxySrv.Close
-			},
-		},
-		{
-			name: "fail. enforced HTTP/2, but server doesn't support it",
-			prepareDialer: func(t *testing.T) (transport.StreamDialer, closeFunc) {
-				connectHandler := httpproxy.NewConnectHandler(tcpDialer)
-				proxySrv := httptest.NewUnstartedServer(connectHandler)
-
-				rootCA, key := generateRootCA(t)
-				proxySrv.TLS = &stdTLS.Config{Certificates: []stdTLS.Certificate{key}}
-				certPool := x509.NewCertPool()
-				certPool.AddCert(rootCA)
-
-				proxySrv.StartTLS()
-
-				proxyURL, err := url.Parse(proxySrv.URL)
-				require.NoError(t, err, "Parse")
-
-				tr, err := NewHTTPProxyTransport(
-					tcpDialer,
-					proxyURL.Host,
-					WithTLSOptions(
-						tls.WithCertVerifier(&tls.StandardCertVerifier{Roots: certPool}),
-						tls.WithALPN([]string{"h2"}),
-					),
-				)
-				require.NoError(t, err, "NewHTTPProxyTransport")
-
-				connClient, err := NewConnectClient(tr)
-				require.NoError(t, err, "NewConnectClient")
-
-				return connClient, proxySrv.Close
-			},
-			wantErr: "tls: no application protocol",
-		},
-		{
-			name: "ok. H2C (cleartext H2, prior knowledge)",
-			prepareDialer: func(t *testing.T) (transport.StreamDialer, closeFunc) {
-				ln, err := net.Listen("tcp", "127.0.0.1:0")
-				require.NoError(t, err, "Listen")
-
-				h2srv := &http2.Server{}
-				h2Handler := http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
-					require.Equal(t, "HTTP/2.0", request.Proto, "Proto")
-					require.Equal(t, http.MethodConnect, request.Method, "Method")
-
-					conn, err := net.Dial("tcp", request.URL.Host)
-					require.NoError(t, err, "Dial")
-					defer conn.Close()
-
-					writer.WriteHeader(http.StatusOK)
-					writer.(http.Flusher).Flush()
-
-					wg := &sync.WaitGroup{}
-
-					wg.Add(1)
-					go func() {
-						defer wg.Done()
-						io.Copy(conn, request.Body)
-					}()
-
-					wg.Add(1)
-					go func() {
-						defer wg.Done()
-						fw := &flusherWriter{
-							Flusher: writer.(http.Flusher),
-							Writer:  writer,
-						}
-						fw.ReadFrom(conn)
-					}()
-
-					wg.Wait()
-				})
-
-				go func() {
-					for {
-						conn, err := ln.Accept()
-						if err != nil {
-							return
-						}
-						go h2srv.ServeConn(conn, &http2.ServeConnOpts{Handler: h2Handler})
-					}
-				}()
-
-				tr, err := NewH2ProxyTransport(tcpDialer, ln.Addr().String(), WithPlainHTTP())
-				require.NoError(t, err, "NewH2ProxyTransport")
-
-				connClient, err := NewConnectClient(tr)
-				require.NoError(t, err, "NewConnectClient")
-
-				return connClient, func() { ln.Close() }
-			},
-		},
-		{
-			name: "ok. H2 with TLS (NewH2ProxyTransport, multiplexed streams)",
-			prepareDialer: func(t *testing.T) (transport.StreamDialer, closeFunc) {
-				rootCA, key := generateRootCA(t)
-				certPool := x509.NewCertPool()
-				certPool.AddCert(rootCA)
-
-				proxySrv := httptest.NewUnstartedServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
-					require.Equal(t, "HTTP/2.0", request.Proto, "Proto")
-					require.Equal(t, http.MethodConnect, request.Method, "Method")
-
-					conn, err := net.Dial("tcp", request.URL.Host)
-					require.NoError(t, err, "Dial")
-					defer conn.Close()
-
-					writer.WriteHeader(http.StatusOK)
-					writer.(http.Flusher).Flush()
-
-					wg := &sync.WaitGroup{}
-					wg.Add(1)
-					go func() {
-						defer wg.Done()
-						io.Copy(conn, request.Body)
-					}()
-					wg.Add(1)
-					go func() {
-						defer wg.Done()
-						fw := &flusherWriter{
-							Flusher: writer.(http.Flusher),
-							Writer:  writer,
-						}
-						fw.ReadFrom(conn)
-					}()
-					wg.Wait()
-				}))
-				proxySrv.TLS = &stdTLS.Config{Certificates: []stdTLS.Certificate{key}}
-				proxySrv.EnableHTTP2 = true
-				proxySrv.StartTLS()
-
-				proxyURL, err := url.Parse(proxySrv.URL)
-				require.NoError(t, err, "Parse")
-
-				// Count TCP connections established to the proxy. With H2 multiplexing,
-				// all concurrent CONNECT streams must share a single TCP connection.
-				var mu sync.Mutex
-				var dialCount int
-				countingDialer := transport.FuncStreamDialer(func(ctx context.Context, addr string) (transport.StreamConn, error) {
-					mu.Lock()
-					dialCount++
-					mu.Unlock()
-					return tcpDialer.DialStream(ctx, addr)
-				})
-
-				tr, err := NewH2ProxyTransport(
-					countingDialer,
-					proxyURL.Host,
-					WithTLSOptions(tls.WithCertVerifier(&tls.StandardCertVerifier{Roots: certPool})),
-				)
-				require.NoError(t, err, "NewH2ProxyTransport")
-
-				connClient, err := NewConnectClient(tr)
-				require.NoError(t, err, "NewConnectClient")
-
-				// Open 3 concurrent tunnels and assert they all share 1 TCP connection to the proxy.
-				multiplexTarget := newTargetSrv(t, "ignored")
-				defer multiplexTarget.Close()
-				targetURL, err := url.Parse(multiplexTarget.URL)
-				require.NoError(t, err, "Parse")
-
-				var tunnelWg sync.WaitGroup
-				for range 3 {
-					tunnelWg.Add(1)
-					go func() {
-						defer tunnelWg.Done()
-						conn, err := connClient.DialStream(context.Background(), targetURL.Host)
-						require.NoError(t, err, "DialStream")
-						conn.Close()
-					}()
-				}
-				tunnelWg.Wait()
-
-				mu.Lock()
-				require.Equal(t, 1, dialCount, "expected all streams to share 1 TCP connection to proxy")
-				mu.Unlock()
-
-				return connClient, proxySrv.Close
-			},
-		},
-		{
-			name: "ok. HTTP/3 over QUIC with TLS",
-			prepareDialer: func(t *testing.T) (transport.StreamDialer, closeFunc) {
-				rootCA, key := generateRootCA(t)
-				certPool := x509.NewCertPool()
-				certPool.AddCert(rootCA)
-
-				srvConn, err := net.ListenPacket("udp", "127.0.0.1:0")
-				require.NoError(t, err, "ListenPacket")
-
-				proxySrv := &http3.Server{
-					Addr: "127.0.0.1:0",
-					Handler: http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
-						require.Equal(t, "HTTP/3.0", request.Proto, "Proto")
-						require.Equal(t, http.MethodConnect, request.Method, "Method")
-
-						conn, err := net.Dial("tcp", request.URL.Host)
-						require.NoError(t, err, "DialStream")
-						defer conn.Close()
-
-						writer.WriteHeader(http.StatusOK)
-						writer.(http.Flusher).Flush()
-
-						streamer, ok := writer.(http3.HTTPStreamer)
-						if !ok {
-							t.Fatal("http.ResponseWriter expected to implement http3.HTTPStreamer")
-						}
-						stream := streamer.HTTPStream()
-						defer stream.Close()
-
-						wg := &sync.WaitGroup{}
-
-						wg.Add(1)
-						go func() {
-							defer wg.Done()
-							io.Copy(stream, conn)
-						}()
-
-						wg.Add(1)
-						go func() {
-							defer wg.Done()
-							io.Copy(conn, stream)
-						}()
-
-						wg.Wait()
-					}),
-					TLSConfig: &stdTLS.Config{
-						Certificates: []stdTLS.Certificate{key},
-					},
-				}
-				go func() {
-					_ = proxySrv.Serve(srvConn)
-				}()
-
-				cliConn, err := net.ListenPacket("udp", "127.0.0.1:0")
-				require.NoError(t, err, "DialPacket")
-
-				tr, err := NewHTTP3ProxyTransport(
-					cliConn.(net.PacketConn),
-					srvConn.LocalAddr().String(),
-					WithTLSOptions(tls.WithCertVerifier(&tls.StandardCertVerifier{Roots: certPool})),
-				)
-				require.NoError(t, err, "NewHTTP3ProxyTransport")
-
-				connClient, err := NewConnectClient(tr)
-				require.NoError(t, err, "NewConnectClient")
-
-				return connClient, func() {
-					_ = cliConn.Close()
-					_ = proxySrv.Close()
-					_ = srvConn.Close()
-				}
-			},
-		},
-	}
-
-	for _, tt := range tests {
-		tt := tt
-		t.Run(tt.name, func(t *testing.T) {
-			t.Parallel()
-
-			type Response struct {
-				Message string `json:"message"`
-			}
-			wantResp := Response{Message: "hello"}
-
-			targetSrv := newTargetSrv(t, wantResp)
-			defer targetSrv.Close()
-
-			connClient, srvCloser := tt.prepareDialer(t)
-			defer srvCloser()
-
-			hc := &http.Client{
-				Transport: &http.Transport{
-					DialContext: func(ctx context.Context, _, addr string) (net.Conn, error) {
-						conn, err := connClient.DialStream(ctx, addr)
-						if err != nil {
-							return nil, err
-						}
-						require.Equal(t, conn.RemoteAddr().String(), addr)
-
-						return conn, nil
-					},
-				},
-			}
-
-			ctx, cancel := context.WithCancel(context.Background())
-			defer cancel()
-			req, err := http.NewRequestWithContext(ctx, http.MethodGet, targetSrv.URL, nil)
-			req.Close = true // close the connection after the request to close the tunnel right away
-			require.NoError(t, err, "NewRequest")
-
-			resp, err := hc.Do(req)
-			if tt.wantErr != "" {
-				require.Contains(t, err.Error(), tt.wantErr, "Do")
-				return
-			}
-			require.NoError(t, err, "Do")
-			defer resp.Body.Close()
-
-			require.Equal(t, http.StatusOK, resp.StatusCode)
-
-			var gotResp Response
-			err = json.NewDecoder(resp.Body).Decode(&gotResp)
-			require.NoError(t, err, "Decode")
-
-			require.Equal(t, wantResp, gotResp, "Response")
-		})
-	}
-}
-
-func generateRootCA(t *testing.T) (*x509.Certificate, stdTLS.Certificate) {
-	t.Helper()
-
-	privKey, err := rsa.GenerateKey(rand.Reader, 2048)
-	require.NoError(t, err)
-
-	template := x509.Certificate{
-		SerialNumber:          big.NewInt(1),
-		Subject:               pkix.Name{Organization: []string{"Test Root CA"}},
-		NotBefore:             time.Now().Add(-1 * time.Hour),
-		NotAfter:              time.Now().Add(24 * time.Hour),
-		KeyUsage:              x509.KeyUsageCertSign | x509.KeyUsageCRLSign,
-		BasicConstraintsValid: true,
-		IsCA:                  true,
-		IPAddresses:           []net.IP{net.ParseIP("127.0.0.1")},
-	}
-
-	certDER, err := x509.CreateCertificate(rand.Reader, &template, &template, &privKey.PublicKey, privKey)
-	require.NoError(t, err)
-
-	keyPEM := pem.EncodeToMemory(&pem.Block{Type: "RSA PRIVATE KEY", Bytes: x509.MarshalPKCS1PrivateKey(privKey)})
-	certPEM := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: certDER})
-
-	tlsCert, err := stdTLS.X509KeyPair(certPEM, keyPEM)
-	require.NoError(t, err)
-
-	cert, err := x509.ParseCertificate(certDER)
-	require.NoError(t, err)
-
-	return cert, tlsCert
-}
-
+// flusherWriter wraps an http.ResponseWriter so that every Write is followed by a Flush.
+// This is required when relaying data over an H2 response stream: without explicit flushing,
+// written bytes sit in the buffer and the remote end never receives them.
 type flusherWriter struct {
 	http.Flusher
 	io.Writer
