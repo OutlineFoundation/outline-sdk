@@ -129,10 +129,18 @@ The `conn_type` parameter specifies the connection type. It must be `wifi` for R
 
 Unit tests use a mock server and run with `go test ./...`.
 
-Integration tests against the live SOAX API are in `api_integration_test.go` and require credentials:
+Integration tests against the live SOAX REST API are in `api_integration_test.go` and require credentials:
 
 ```sh
 SOAX_API_KEY=<api_key> SOAX_PACKAGE_KEY=<package_key> go test -run TestLiveAPI -v
 ```
 
 Note that `TestLiveAPI_GetResidentialISPs` requires a Residential package and will fail with a Mobile package, and `TestLiveAPI_GetMobileISPs` requires a Mobile package and will fail with a Residential package.
+
+Integration tests against the live SOAX proxy are in `proxy_integration_test.go` and require credentials:
+
+```sh
+SOAX_PACKAGE_ID=<package_id> SOAX_PACKAGE_KEY=<package_key> go test -run TestLiveProxy -v
+```
+
+These tests cover both SOCKS5 (`TestLiveProxy_SOCKS5`) and HTTP CONNECT (`TestLiveProxy_HTTPConnect`) and verify that the exit IP is in the expected country.
