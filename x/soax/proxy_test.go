@@ -7,7 +7,7 @@
 //     https://www.apache.org/licenses/LICENSE-2.0
 //
 // Unless required by applicable law or agreed to in writing, software
-// distributed under the License is an "AS IS" BASIS,
+// distributed under the License is distributed on an "AS IS" BASIS,
 // WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 // See the License for the specific language governing permissions and
 // limitations under the License.
@@ -16,8 +16,11 @@ package soax
 
 import (
 	"context"
+	"encoding/base64"
 	"errors"
 	"net"
+	"net/http"
+	"net/http/httptest"
 	"net/url"
 	"sync"
 	"testing"
@@ -25,6 +28,7 @@ import (
 
 	"github.com/stretchr/testify/require"
 	"github.com/things-go/go-socks5"
+	"golang.getoutline.org/sdk/x/httpconnect"
 )
 
 func TestSessionConfig_newUsername_AllFields(t *testing.T) {
@@ -163,4 +167,57 @@ func TestSession_NewSOCKS5Client(t *testing.T) {
 
 	_, err = client.DialStream(context.Background(), targetListener.Addr().String())
 	require.NoError(t, err)
+}
+
+func TestSession_NewWebProxyStreamDialer(t *testing.T) {
+	config := ProxySessionConfig{
+		Auth: ProxyAuthConfig{
+			PackageID:  123456,
+			PackageKey: "my_package_key",
+		},
+	}
+
+	var mu sync.Mutex
+	var capturedAuth string
+
+	proxySrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		require.Equal(t, http.MethodConnect, r.Method)
+		mu.Lock()
+		capturedAuth = r.Header.Get("Proxy-Authorization")
+		mu.Unlock()
+
+		hijacker := w.(http.Hijacker)
+		conn, buf, err := hijacker.Hijack()
+		require.NoError(t, err)
+		defer conn.Close()
+
+		_, err = buf.WriteString("HTTP/1.1 200 Connection established\r\n\r\n")
+		require.NoError(t, err)
+		require.NoError(t, buf.Flush())
+	}))
+	defer proxySrv.Close()
+
+	proxyURL, err := url.Parse(proxySrv.URL)
+	require.NoError(t, err)
+	config.Endpoint = proxyURL.Host
+	session := config.NewSession()
+	expectedUserinfo := session.config.newUserPassword()
+
+	dialer, err := session.NewWebProxyStreamDialer(httpconnect.WithPlainHTTP())
+	require.NoError(t, err)
+	require.NotNil(t, dialer)
+
+	// We need a listener so the proxy has a target to report connecting to.
+	targetListener, err := net.Listen("tcp", "127.0.0.1:0")
+	require.NoError(t, err)
+	defer targetListener.Close()
+
+	_, err = dialer.DialStream(context.Background(), targetListener.Addr().String())
+	require.NoError(t, err)
+
+	mu.Lock()
+	actualAuth := capturedAuth
+	mu.Unlock()
+	expectedAuth := "Basic " + base64.StdEncoding.EncodeToString([]byte(expectedUserinfo.String()))
+	require.Equal(t, expectedAuth, actualAuth)
 }
