@@ -280,6 +280,94 @@ func Test_NewConnectClient_Ok(t *testing.T) {
 			},
 		},
 		{
+			name: "ok. H2 with TLS (NewH2ProxyTransport, multiplexed streams)",
+			prepareDialer: func(t *testing.T) (transport.StreamDialer, closeFunc) {
+				rootCA, key := generateRootCA(t)
+				certPool := x509.NewCertPool()
+				certPool.AddCert(rootCA)
+
+				proxySrv := httptest.NewUnstartedServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+					require.Equal(t, "HTTP/2.0", request.Proto, "Proto")
+					require.Equal(t, http.MethodConnect, request.Method, "Method")
+
+					conn, err := net.Dial("tcp", request.URL.Host)
+					require.NoError(t, err, "Dial")
+					defer conn.Close()
+
+					writer.WriteHeader(http.StatusOK)
+					writer.(http.Flusher).Flush()
+
+					wg := &sync.WaitGroup{}
+					wg.Add(1)
+					go func() {
+						defer wg.Done()
+						io.Copy(conn, request.Body)
+					}()
+					wg.Add(1)
+					go func() {
+						defer wg.Done()
+						fw := &flusherWriter{
+							Flusher: writer.(http.Flusher),
+							Writer:  writer,
+						}
+						fw.ReadFrom(conn)
+					}()
+					wg.Wait()
+				}))
+				proxySrv.TLS = &stdTLS.Config{Certificates: []stdTLS.Certificate{key}}
+				proxySrv.EnableHTTP2 = true
+				proxySrv.StartTLS()
+
+				proxyURL, err := url.Parse(proxySrv.URL)
+				require.NoError(t, err, "Parse")
+
+				// Count TCP connections established to the proxy. With H2 multiplexing,
+				// all concurrent CONNECT streams must share a single TCP connection.
+				var mu sync.Mutex
+				var dialCount int
+				countingDialer := transport.FuncStreamDialer(func(ctx context.Context, addr string) (transport.StreamConn, error) {
+					mu.Lock()
+					dialCount++
+					mu.Unlock()
+					return tcpDialer.DialStream(ctx, addr)
+				})
+
+				tr, err := NewH2ProxyTransport(
+					countingDialer,
+					proxyURL.Host,
+					WithTLSOptions(tls.WithCertVerifier(&tls.StandardCertVerifier{Roots: certPool})),
+				)
+				require.NoError(t, err, "NewH2ProxyTransport")
+
+				connClient, err := NewConnectClient(tr)
+				require.NoError(t, err, "NewConnectClient")
+
+				// Open 3 concurrent tunnels and assert they all share 1 TCP connection to the proxy.
+				multiplexTarget := newTargetSrv(t, "ignored")
+				defer multiplexTarget.Close()
+				targetURL, err := url.Parse(multiplexTarget.URL)
+				require.NoError(t, err, "Parse")
+
+				var tunnelWg sync.WaitGroup
+				for range 3 {
+					tunnelWg.Add(1)
+					go func() {
+						defer tunnelWg.Done()
+						conn, err := connClient.DialStream(context.Background(), targetURL.Host)
+						require.NoError(t, err, "DialStream")
+						conn.Close()
+					}()
+				}
+				tunnelWg.Wait()
+
+				mu.Lock()
+				require.Equal(t, 1, dialCount, "expected all streams to share 1 TCP connection to proxy")
+				mu.Unlock()
+
+				return connClient, proxySrv.Close
+			},
+		},
+		{
 			name: "ok. HTTP/3 over QUIC with TLS",
 			prepareDialer: func(t *testing.T) (transport.StreamDialer, closeFunc) {
 				rootCA, key := generateRootCA(t)
