@@ -112,6 +112,10 @@ func ToGoTLSConfig(cfg *ClientConfig) *tls.Config {
 
 // toStdConfig creates a [tls.Config] based on the configured parameters.
 func (cfg *ClientConfig) toStdConfig() *tls.Config {
+	certVerifier := cfg.CertVerifier
+	if certVerifier == nil {
+		certVerifier = &StandardCertVerifier{CertificateName: cfg.ServerName}
+	}
 	return &tls.Config{
 		ServerName:         cfg.ServerName,
 		NextProtos:         cfg.NextProtos,
@@ -120,7 +124,7 @@ func (cfg *ClientConfig) toStdConfig() *tls.Config {
 		// replacing. This will not disable VerifyConnection.
 		InsecureSkipVerify: true,
 		VerifyConnection: func(cs tls.ConnectionState) error {
-			return cfg.CertVerifier.VerifyCertificate(&CertVerificationContext{
+			return certVerifier.VerifyCertificate(&CertVerificationContext{
 				PeerCertificates: cs.PeerCertificates,
 			})
 		},

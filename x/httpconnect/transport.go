@@ -163,6 +163,10 @@ func (rt proxyRT) Scheme() string {
 // TODO: Replace with tls.ToGoTLSConfig call once outline-sdk dependency version for this module is bumped.
 // It is basically a copy of the implementation ToGoTLSConfig
 func toStdConfig(cfg tls.ClientConfig) *stdTLS.Config {
+	certVerifier := cfg.CertVerifier
+	if certVerifier == nil {
+		certVerifier = &tls.StandardCertVerifier{CertificateName: cfg.ServerName}
+	}
 	return &stdTLS.Config{
 		ServerName:         cfg.ServerName,
 		NextProtos:         cfg.NextProtos,
@@ -171,7 +175,7 @@ func toStdConfig(cfg tls.ClientConfig) *stdTLS.Config {
 		// replacing. This will not disable VerifyConnection.
 		InsecureSkipVerify: true,
 		VerifyConnection: func(cs stdTLS.ConnectionState) error {
-			return cfg.CertVerifier.VerifyCertificate(&tls.CertVerificationContext{
+			return certVerifier.VerifyCertificate(&tls.CertVerificationContext{
 				PeerCertificates: cs.PeerCertificates,
 			})
 		},
