@@ -96,40 +96,6 @@ func verifyTunnel(t *testing.T, dialer transport.StreamDialer) {
 	require.Equal(t, want, got)
 }
 
-// newH2ConnectHandler returns an http.Handler that handles HTTP/2 CONNECT requests
-// by dialing the target and relaying data in both directions.
-//
-// H2 does not support connection hijacking, so this handler uses the response writer
-// as a bidirectional stream with explicit flushing.
-func newH2ConnectHandler(t *testing.T) http.Handler {
-	t.Helper()
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		require.Equal(t, "HTTP/2.0", r.Proto, "Proto")
-		require.Equal(t, http.MethodConnect, r.Method, "Method")
-
-		conn, err := net.Dial("tcp", r.URL.Host)
-		require.NoError(t, err, "Dial")
-		defer conn.Close()
-
-		w.WriteHeader(http.StatusOK)
-		w.(http.Flusher).Flush()
-
-		var wg sync.WaitGroup
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			io.Copy(conn, r.Body)
-		}()
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			// io.Copy doesn't flush, so use flusherWriter to flush after each write.
-			fw := &flusherWriter{Flusher: w.(http.Flusher), Writer: w}
-			fw.ReadFrom(conn)
-		}()
-		wg.Wait()
-	})
-}
 
 // Test_ConnectClient_H1_Plain verifies that custom headers (e.g. Proxy-Authorization)
 // are forwarded on every CONNECT request when using a plain HTTP/1.1 proxy.
@@ -193,7 +159,38 @@ func Test_ConnectClient_H2_TLS(t *testing.T) {
 
 	tcpDialer := &transport.TCPDialer{}
 
-	proxySrv := httptest.NewUnstartedServer(newH2ConnectHandler(t))
+	// Use httpproxy.NewConnectHandler directly to verify it handles H2 (not just H1).
+	// Previously this would fail because the handler required http.Hijacker, which H2 doesn't support.
+	proxySrv := httptest.NewUnstartedServer(httpproxy.NewConnectHandler(tcpDialer))
+	proxySrv.EnableHTTP2 = true
+	proxySrv.StartTLS()
+	t.Cleanup(proxySrv.Close)
+
+	certPool := x509.NewCertPool()
+	certPool.AddCert(proxySrv.Certificate())
+
+	proxyURL, err := url.Parse(proxySrv.URL)
+	require.NoError(t, err, "Parse")
+
+	tr, err := NewH2ProxyTransport(tcpDialer, proxyURL.Host,
+		WithTLSOptions(tls.WithCertVerifier(&tls.StandardCertVerifier{Roots: certPool})),
+	)
+	require.NoError(t, err, "NewH2ProxyTransport")
+
+	connClient, err := NewConnectClient(tr)
+	require.NoError(t, err, "NewConnectClient")
+
+	verifyTunnel(t, connClient)
+}
+
+// Test_ConnectClient_H2_TLS_HTTPTransport verifies tunneling over HTTP/2 when ALPN negotiation selects h2.
+// Uses NewHTTPProxyTransport, which adds H2 support on top of net/http.Transport via ALPN.
+func Test_ConnectClient_H2_TLS_HTTPTransport(t *testing.T) {
+	t.Parallel()
+
+	tcpDialer := &transport.TCPDialer{}
+
+	proxySrv := httptest.NewUnstartedServer(httpproxy.NewConnectHandler(tcpDialer))
 	proxySrv.EnableHTTP2 = true
 	proxySrv.StartTLS()
 	t.Cleanup(proxySrv.Close)
@@ -264,7 +261,7 @@ func Test_ConnectClient_H2C(t *testing.T) {
 	t.Cleanup(func() { ln.Close() })
 
 	h2srv := &http2.Server{}
-	handler := newH2ConnectHandler(t)
+	handler := httpproxy.NewConnectHandler(tcpDialer)
 	go func() {
 		for {
 			conn, err := ln.Accept()
@@ -291,7 +288,7 @@ func Test_ConnectClient_H2_TLS_Multiplexed(t *testing.T) {
 
 	tcpDialer := &transport.TCPDialer{}
 
-	proxySrv := httptest.NewUnstartedServer(newH2ConnectHandler(t))
+	proxySrv := httptest.NewUnstartedServer(httpproxy.NewConnectHandler(tcpDialer))
 	proxySrv.EnableHTTP2 = true
 	proxySrv.StartTLS()
 	t.Cleanup(proxySrv.Close)

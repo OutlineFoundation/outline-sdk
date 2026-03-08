@@ -22,6 +22,7 @@ import (
 	"net"
 	"net/http"
 	"strings"
+	"sync"
 
 	"golang.getoutline.org/sdk/transport"
 	"golang.getoutline.org/sdk/x/configurl"
@@ -90,50 +91,112 @@ func (h *connectHandler) ServeHTTP(proxyResp http.ResponseWriter, proxyReq *http
 	}
 	defer targetConn.Close()
 
-	hijacker, ok := proxyResp.(http.Hijacker)
-	if !ok {
-		http.Error(proxyResp, "Webserver doesn't support hijacking", http.StatusInternalServerError)
-		return
+	// Set up protocol-specific client I/O. H1 hijacks the raw connection; H2/H3 stream
+	// through the ResponseWriter with explicit flushing after each write.
+	var clientReader io.Reader
+	var clientWriter io.ReaderFrom
+	var afterCopy func()
+	if hijacker, ok := proxyResp.(http.Hijacker); ok {
+		// H1: hijack the raw connection and relay using the underlying bufio.ReadWriter.
+		httpConn, clientRW, err := hijacker.Hijack()
+		if err != nil {
+			http.Error(proxyResp, "Failed to hijack connection", http.StatusInternalServerError)
+			return
+		}
+		// TODO(fortuna): Use context.AfterFunc after we migrate to Go 1.21.
+		go func() {
+			// We close the hijacked connection when the context is done. This way
+			// we allow the HTTP server to control the request lifetime.
+			// The request context will be cancelled right after ServeHTTP returns,
+			// but it can be cancelled before, if the server uses a custom BaseContext.
+			<-proxyReq.Context().Done()
+			httpConn.Close()
+		}()
+		clientRW.Write([]byte("HTTP/1.1 200 Connection established\r\n\r\n"))
+		clientRW.Flush()
+		// clientRW (bufio.ReadWriter) implements io.ReaderFrom via its embedded bufio.Writer.
+		clientReader = clientRW
+		clientWriter = clientRW
+		// afterCopy flushes the bufio buffer to push any remaining bytes to the client.
+		afterCopy = func() { clientRW.Flush() }
+	} else {
+		// H2/H3: hijacking is not available on multiplexed connections.
+		flusher, ok := proxyResp.(http.Flusher)
+		if !ok {
+			http.Error(proxyResp, "Webserver doesn't support flushing", http.StatusInternalServerError)
+			return
+		}
+		proxyResp.WriteHeader(http.StatusOK)
+		flusher.Flush()
+		// flushingWriter flushes after every write, so no afterCopy flush is needed.
+		clientReader = proxyReq.Body
+		clientWriter = &flushingWriter{w: proxyResp, f: flusher}
+		afterCopy = func() {}
 	}
-
-	httpConn, clientRW, err := hijacker.Hijack()
-	if err != nil {
-		http.Error(proxyResp, "Failed to hijack connection", http.StatusInternalServerError)
-		return
-	}
-	// TODO(fortuna): Use context.AfterFunc after we migrate to Go 1.21.
-	go func() {
-		// We close the hijacked connection when the context is done. This way
-		// we allow the HTTP server to control the request lifetime.
-		// The request context will be cancelled right after ServeHTTP returns,
-		// but it can be cancelled before, if the server uses a custom BaseContext.
-		<-proxyReq.Context().Done()
-		httpConn.Close()
-	}()
-
-	// Inform the client that the connection has been established.
-	clientRW.Write([]byte("HTTP/1.1 200 Connection established\r\n\r\n"))
-	clientRW.Flush()
 
 	// Relay data between client and target in both directions.
+	var wg sync.WaitGroup
+	wg.Add(1)
 	go func() {
+		defer wg.Done()
 		// io.Copy prefers WriteTo, which clientRW implements. However,
 		// bufio.ReadWriter.WriteTo issues an empty Write() call, which flushes
 		// the Shadowsocks IV and connect request, breaking the coalescing with
 		// the initial data. By preferring ReaderFrom, the coalescing of IV,
 		// request and initial data is preserved.
 		if rf, ok := targetConn.(io.ReaderFrom); ok {
-			rf.ReadFrom(clientRW)
+			rf.ReadFrom(clientReader)
 		} else {
-			io.Copy(targetConn, clientRW)
+			io.Copy(targetConn, clientReader)
 		}
 		targetConn.CloseWrite()
 	}()
 	// We can't use io.Copy here because it doesn't call Flush on writes, so the first
-	// write is never sent and the entire relay gets stuck. bufio.Writer.ReadFrom takes
-	// care of that.
-	clientRW.ReadFrom(targetConn)
-	clientRW.Flush()
+	// write is never sent and the entire relay gets stuck. bufio.Writer.ReadFrom (H1)
+	// and flushingWriter.ReadFrom (H2/H3) take care of that.
+	clientWriter.ReadFrom(targetConn)
+	afterCopy()
+	wg.Wait()
+}
+
+// flushingWriter wraps an http.ResponseWriter and flushes after every write,
+// ensuring bytes are sent to the client immediately over H2/H3 streams.
+type flushingWriter struct {
+	w http.ResponseWriter
+	f http.Flusher
+}
+
+func (fw *flushingWriter) Write(b []byte) (int, error) {
+	n, err := fw.w.Write(b)
+	fw.f.Flush()
+	return n, err
+}
+
+// ReadFrom shadows http.ResponseWriter's own ReadFrom (present in net/http's *response),
+// which does not flush. This implementation flushes after every write so bytes reach
+// the client immediately, and prefers r.WriteTo to avoid an intermediate buffer.
+func (fw *flushingWriter) ReadFrom(r io.Reader) (int64, error) {
+	if wt, ok := r.(io.WriterTo); ok {
+		return wt.WriteTo(fw)
+	}
+	buf := make([]byte, 32*1024)
+	var n int64
+	for {
+		nr, er := r.Read(buf)
+		if nr > 0 {
+			nw, ew := fw.Write(buf[:nr])
+			n += int64(nw)
+			if ew != nil {
+				return n, ew
+			}
+		}
+		if er == io.EOF {
+			return n, nil
+		}
+		if er != nil {
+			return n, er
+		}
+	}
 }
 
 // NewConnectHandler creates a [http.Handler] that handles CONNECT requests and forwards
