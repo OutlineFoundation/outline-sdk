@@ -25,7 +25,6 @@ import (
 	"sync"
 
 	"golang.getoutline.org/sdk/transport"
-	"golang.getoutline.org/sdk/x/configurl"
 )
 
 type sanitizeErrorDialer struct {
@@ -51,9 +50,24 @@ func (d *sanitizeErrorDialer) DialStream(ctx context.Context, addr string) (tran
 	return conn, nil
 }
 
+// StreamDialerParser creates a [transport.StreamDialer] from a config string.
+// It is used by [NewConnectHandler] to support the Transport request header.
+type StreamDialerParser func(ctx context.Context, config string) (transport.StreamDialer, error)
+
+// HandlerOption configures a connect handler.
+type HandlerOption func(*connectHandler)
+
+// WithStreamDialerParser sets a factory that creates a dialer from the Transport request header value.
+// When set, clients can override the transport per-request by sending a Transport header.
+func WithStreamDialerParser(f StreamDialerParser) HandlerOption {
+	return func(h *connectHandler) {
+		h.dialerFactory = f
+	}
+}
+
 type connectHandler struct {
-	dialer    *sanitizeErrorDialer
-	providers *configurl.ProviderContainer
+	dialer        *sanitizeErrorDialer
+	dialerFactory StreamDialerParser
 }
 
 var _ http.Handler = (*connectHandler)(nil)
@@ -76,17 +90,24 @@ func (h *connectHandler) ServeHTTP(proxyResp http.ResponseWriter, proxyReq *http
 		return
 	}
 
-	// Dial the target.
-	transportConfig := proxyReq.Header.Get("Transport")
-	dialer, err := h.providers.NewStreamDialer(proxyReq.Context(), transportConfig)
-	if err != nil {
-		// Because we sanitize the base dialer error, it's safe to return error details here.
-		http.Error(proxyResp, fmt.Sprintf("Invalid config in Transport header: %v", err), http.StatusBadRequest)
-		return
+	// Dial the target, optionally using a per-request transport from the Transport header.
+	var dialer transport.StreamDialer = h.dialer
+	if transportConfig := proxyReq.Header.Get("Transport"); transportConfig != "" {
+		if h.dialerFactory == nil {
+			http.Error(proxyResp, "Transport header is not supported", http.StatusBadRequest)
+			return
+		}
+		var err error
+		dialer, err = h.dialerFactory(proxyReq.Context(), transportConfig)
+		if err != nil {
+			// Because we sanitize the base dialer error, it's safe to return error details here.
+			http.Error(proxyResp, fmt.Sprintf("Invalid config in Transport header: %v", err), http.StatusBadRequest)
+			return
+		}
 	}
-	targetConn, err := dialer.DialStream(proxyReq.Context(), proxyReq.Host)
-	if err != nil {
-		http.Error(proxyResp, fmt.Sprintf("Failed to connect to %v: %v", proxyReq.Host, err), http.StatusServiceUnavailable)
+	targetConn, err2 := dialer.DialStream(proxyReq.Context(), proxyReq.Host)
+	if err2 != nil {
+		http.Error(proxyResp, fmt.Sprintf("Failed to connect to %v: %v", proxyReq.Host, err2), http.StatusServiceUnavailable)
 		return
 	}
 	defer targetConn.Close()
@@ -202,17 +223,18 @@ func (fw *flushingWriter) ReadFrom(r io.Reader) (int64, error) {
 // NewConnectHandler creates a [http.Handler] that handles CONNECT requests and forwards
 // the requests using the given [transport.StreamDialer].
 //
-// Clients can specify a Transport header with a value of a transport config as specified in
-// the [configurl] package to specify the transport for a given request.
+// Use [WithStreamDialerParser] to support the Transport request header, which allows clients
+// to specify a per-request transport config.
 //
 // The resulting handler is currently vulnerable to probing attacks. It's ok as a localhost proxy
 // but it may be vulnerable if used as a public proxy.
-func NewConnectHandler(dialer transport.StreamDialer) http.Handler {
+func NewConnectHandler(dialer transport.StreamDialer, opts ...HandlerOption) http.Handler {
 	// We sanitize the errors from the input Dialer because we don't want to leak sensitive details
 	// of the base dialer (e.g. access key credentials) to the user.
 	sd := &sanitizeErrorDialer{dialer}
-	// TODO(fortuna): Inject the config parser
-	providers := configurl.NewDefaultProviders()
-	providers.StreamDialers.BaseInstance = sd
-	return &connectHandler{sd, providers}
+	h := &connectHandler{dialer: sd}
+	for _, opt := range opts {
+		opt(h)
+	}
+	return h
 }
