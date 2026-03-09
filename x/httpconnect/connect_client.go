@@ -28,6 +28,7 @@ import (
 //
 // The package also includes transport builders:
 // - NewHTTPProxyTransport
+// - NewH2ProxyTransport
 // - NewH3ProxyTransport
 //
 // Options:
