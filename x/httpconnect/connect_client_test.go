@@ -395,10 +395,10 @@ func Test_ConnectClient_H3_QUIC(t *testing.T) {
 	require.NoError(t, err, "ListenPacket")
 	t.Cleanup(func() { _ = cliConn.Close() })
 
-	tr, err := NewHTTP3ProxyTransport(cliConn.(net.PacketConn), srvConn.LocalAddr().String(),
+	tr, err := NewH3ProxyTransport(cliConn.(net.PacketConn), srvConn.LocalAddr().String(),
 		WithTLSOptions(tls.WithCertVerifier(&tls.StandardCertVerifier{Roots: certPool})),
 	)
-	require.NoError(t, err, "NewHTTP3ProxyTransport")
+	require.NoError(t, err, "NewH3ProxyTransport")
 
 	connClient, err := NewConnectClient(tr)
 	require.NoError(t, err, "NewConnectClient")

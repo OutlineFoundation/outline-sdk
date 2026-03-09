@@ -28,7 +28,7 @@ import (
 //
 // The package also includes transport builders:
 // - NewHTTPProxyTransport
-// - NewHTTP3ProxyTransport
+// - NewH3ProxyTransport
 //
 // Options:
 // - WithHeaders appends the provided headers to every CONNECT request.
@@ -39,13 +39,18 @@ type ConnectClient struct {
 
 var _ transport.StreamDialer = (*ConnectClient)(nil)
 
+// ProxyRoundTripper is the minimal interface required by ConnectClient to send HTTP CONNECT requests.
+// The Scheme method is used to construct the request URL, and the RoundTrip method is used to send the request.
 type ProxyRoundTripper interface {
 	http.RoundTripper
 	Scheme() string
 }
 
+// ClientOption is an option for configuring the ConnectClient.
 type ClientOption func(c *clientConfig)
 
+// NewConnectClient creates a new ConnectClient that uses the provided ProxyRoundTripper to send HTTP CONNECT requests.
+// The returned client implements the [transport.StreamDialer] interface.
 func NewConnectClient(proxyRT ProxyRoundTripper, opts ...ClientOption) (*ConnectClient, error) {
 	if proxyRT == nil {
 		return nil, fmt.Errorf("transport must not be nil")
@@ -75,6 +80,7 @@ type clientConfig struct {
 	headers http.Header
 }
 
+// DialStream implements the [transport.StreamDialer] interface by sending an HTTP CONNECT request to the proxy and returning a connection that tunnels to the target address.
 func (cc *ConnectClient) DialStream(ctx context.Context, remoteAddr string) (transport.StreamConn, error) {
 	raddr, err := transport.MakeNetAddr("tcp", remoteAddr)
 	if err != nil {

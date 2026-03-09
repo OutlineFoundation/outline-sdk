@@ -158,12 +158,12 @@ func NewH2ProxyTransport(dialer transport.StreamDialer, proxyAddr string, opts .
 	}, nil
 }
 
-// NewHTTP3ProxyTransport creates an HTTP/3 transport that establishes a QUIC connection to the proxy using the given [net.PacketConn].
+// NewH3ProxyTransport creates an HTTP/3 transport that establishes a QUIC connection to the proxy using the given [net.PacketConn].
 // The proxy address must be in the form "host:port".
 //
 // For HTTP/3 over QUIC over a datagram connection.
 // [tls.WithALPN] has no effect on this transport.
-func NewHTTP3ProxyTransport(conn net.PacketConn, proxyAddr string, opts ...TransportOption) (ProxyRoundTripper, error) {
+func NewH3ProxyTransport(conn net.PacketConn, proxyAddr string, opts ...TransportOption) (ProxyRoundTripper, error) {
 	if conn == nil {
 		return nil, errors.New("conn must not be nil")
 	}
