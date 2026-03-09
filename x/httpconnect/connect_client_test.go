@@ -152,8 +152,7 @@ func Test_ConnectClient_H1_TLS(t *testing.T) {
 	verifyTunnel(t, connClient)
 }
 
-// Test_ConnectClient_H2_TLS verifies tunneling over HTTP/2 when ALPN negotiation selects h2.
-// Uses NewHTTPProxyTransport, which adds H2 support on top of net/http.Transport via ALPN.
+// Test_ConnectClient_H2_TLS verifies tunneling over HTTP/2 using NewH2ProxyTransport directly with TLS.
 func Test_ConnectClient_H2_TLS(t *testing.T) {
 	t.Parallel()
 
