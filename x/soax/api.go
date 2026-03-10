@@ -42,8 +42,6 @@ const (
 type Client struct {
 	APIKey     string
 	PackageKey string
-	// ConnType is the connection type.
-	ConnType ConnType
 	// HTTPClient is the client to use for API calls. If nil, a default client will be used.
 	HTTPClient *http.Client
 	// BaseURL for testing. If empty, "https://api.soax.com" is used. This can be a plain URL, or one
@@ -112,7 +110,8 @@ func (c *Client) doAndDecode(req *http.Request, result any) error {
 }
 
 // GetResidentialISPs returns the available ISPs for the given location.
-// This is for Residential packages only. The official documentation refers to them as "WiFi ISPS".
+// Requires a Residential package; returns an error with a Mobile package.
+// The official documentation refers to residential ISPs as "WiFi ISPs".
 // API reference: https://helpcenter.soax.com/en/articles/6228391-getting-a-list-of-wifi-isps
 func (c *Client) GetResidentialISPs(ctx context.Context, countryCode, regionID, cityID string) ([]string, error) {
 	req, err := c.newRequest(ctx, "/api/get-country-isp", map[string]string{
@@ -131,7 +130,7 @@ func (c *Client) GetResidentialISPs(ctx context.Context, countryCode, regionID, 
 }
 
 // GetMobileISPs returns the available mobile carriers for the given location.
-// This is for Mobile packages only.
+// Requires a Mobile package; returns an error with a Residential package.
 // API reference: https://helpcenter.soax.com/en/articles/6228381-getting-a-list-of-mobile-carriers
 func (c *Client) GetMobileISPs(ctx context.Context, countryCode, regionID, cityID string) ([]string, error) {
 	req, err := c.newRequest(ctx, "/api/get-country-operators", map[string]string{
@@ -150,11 +149,12 @@ func (c *Client) GetMobileISPs(ctx context.Context, countryCode, regionID, cityI
 }
 
 // GetRegions returns the available regions for the given country and ISP.
+// connType must match the package type: [ConnTypeResidential] for Residential packages, [ConnTypeMobile] for Mobile packages.
 // API reference: https://helpcenter.soax.com/en/articles/6227864-getting-a-list-of-regions
-func (c *Client) GetRegions(ctx context.Context, countryCode, isp string) ([]string, error) {
+func (c *Client) GetRegions(ctx context.Context, connType ConnType, countryCode, isp string) ([]string, error) {
 	req, err := c.newRequest(ctx, "/api/get-country-regions", map[string]string{
 		"country_iso": strings.ToLower(countryCode),
-		"conn_type":   string(c.ConnType),
+		"conn_type":   string(connType),
 		"provider":    isp,
 	})
 	if err != nil {
@@ -168,11 +168,12 @@ func (c *Client) GetRegions(ctx context.Context, countryCode, isp string) ([]str
 }
 
 // GetCities returns the available cities for the given country, ISP, and region.
+// connType must match the package type: [ConnTypeResidential] for Residential packages, [ConnTypeMobile] for Mobile packages.
 // API reference: https://helpcenter.soax.com/en/articles/6228092-getting-a-list-of-cities
-func (c *Client) GetCities(ctx context.Context, countryCode, isp, regionID string) ([]string, error) {
+func (c *Client) GetCities(ctx context.Context, connType ConnType, countryCode, isp, regionID string) ([]string, error) {
 	req, err := c.newRequest(ctx, "/api/get-country-cities", map[string]string{
 		"country_iso": strings.ToLower(countryCode),
-		"conn_type":   string(c.ConnType),
+		"conn_type":   string(connType),
 		"provider":    isp,
 		"region":      regionID,
 	})

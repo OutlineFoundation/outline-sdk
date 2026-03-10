@@ -78,7 +78,7 @@ type ProxySessionConfig struct {
 
 // ProxySession represents a session with unique SessionID, created from a SessionConfig.
 type ProxySession struct {
-	config *ProxySessionConfig
+	config ProxySessionConfig
 }
 
 func (c *ProxySessionConfig) newUserPassword() *url.Userinfo {
@@ -109,8 +109,7 @@ func (c *ProxySessionConfig) newUserPassword() *url.Userinfo {
 
 func (c *ProxySessionConfig) NewSession() *ProxySession {
 	session := new(ProxySession)
-	// Copy the config to not modify the original one.
-	session.config = c
+	session.config = *c
 	if session.config.Session != SessionNotPersistent {
 		if session.config.Session.ID == "" {
 			session.config.Session.ID = strconv.Itoa(int(time.Now().UnixMilli()))
@@ -145,10 +144,10 @@ func (c *ProxySession) NewSOCKS5Client() (*socks5.Client, error) {
 	return client, nil
 }
 
-// NewStreamDialer creates a [transport.StreamDialer] that connects through the SOAX proxy.
+// NewWebProxyStreamDialer creates a [transport.StreamDialer] that connects through the SOAX proxy.
 // It uses HTTP CONNECT, so it only supports TCP.
-func (c *ProxySession) NewWebProxyStreamDialer() (transport.StreamDialer, error) {
-	rt, err := httpconnect.NewHTTPProxyTransport(&transport.TCPDialer{}, c.config.Endpoint)
+func (c *ProxySession) NewWebProxyStreamDialer(opts ...httpconnect.TransportOption) (transport.StreamDialer, error) {
+	rt, err := httpconnect.NewHTTPProxyTransport(&transport.TCPDialer{}, c.config.Endpoint, opts...)
 	if err != nil {
 		return nil, err
 	}
