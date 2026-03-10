@@ -103,7 +103,7 @@ Request format:
 https://api.soax.com/api/get-country-regions?api_key=<api_key>&package_key=<package_key>&country_iso=<country_iso>&conn_type=<conn_type>[&provider=<provider>]
 ```
 
-The `conn_type` parameter specifies the connection type. It must be `wifi` for residential proxies and `mobile` for mobile proxies.
+The `conn_type` parameter specifies the connection type. It must be `wifi` for Residential packages and `mobile` for Mobile packages.
 
 Here is an example of listing regions in Iran:
 
@@ -123,4 +123,24 @@ Request format:
 https://api.soax.com/api/get-country-cities?api_key=<api_key>&package_key=<package_key>&country_iso=<country_iso>&conn_type=<conn_type>[&provider=<provider_name>[&region=<region_name>]]
 ```
 
-The `conn_type` parameter specifies the connection type. It must be `wifi` for residential proxies and `mobile` for mobile proxies.
+The `conn_type` parameter specifies the connection type. It must be `wifi` for Residential packages and `mobile` for Mobile packages.
+
+## Testing
+
+Unit tests use a mock server and run with `go test ./...`.
+
+Integration tests against the live SOAX REST API are in `api_integration_test.go` and require credentials:
+
+```sh
+SOAX_API_KEY=<api_key> SOAX_PACKAGE_KEY=<package_key> go test -run TestLiveAPI -v
+```
+
+Note that `TestLiveAPI_GetResidentialISPs` requires a Residential package and will fail with a Mobile package, and `TestLiveAPI_GetMobileISPs` requires a Mobile package and will fail with a Residential package.
+
+Integration tests against the live SOAX proxy are in `proxy_integration_test.go` and require credentials:
+
+```sh
+SOAX_PACKAGE_ID=<package_id> SOAX_PACKAGE_KEY=<package_key> go test -run TestLiveProxy -v
+```
+
+These tests cover both SOCKS5 (`TestLiveProxy_SOCKS5`) and HTTP CONNECT (`TestLiveProxy_HTTPConnect`) and verify that the exit IP is in the expected country.
