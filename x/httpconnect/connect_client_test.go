@@ -419,35 +419,3 @@ func newTargetSrv(t *testing.T, resp interface{}) *httptest.Server {
 		require.NoError(t, err)
 	}))
 }
-
-// flusherWriter wraps an http.ResponseWriter so that every Write is followed by a Flush.
-// This is required when relaying data over an H2 response stream: without explicit flushing,
-// written bytes sit in the buffer and the remote end never receives them.
-type flusherWriter struct {
-	http.Flusher
-	io.Writer
-}
-
-func (fw flusherWriter) ReadFrom(r io.Reader) (int64, error) {
-	var (
-		buf   = make([]byte, 32*1024)
-		total int64
-	)
-	for {
-		nr, er := r.Read(buf)
-		if nr > 0 {
-			nw, ew := fw.Writer.Write(buf[:nr])
-			total += int64(nw)
-			if ew != nil {
-				return total, ew
-			}
-			fw.Flush()
-		}
-		if er != nil {
-			if er == io.EOF {
-				return total, nil
-			}
-			return total, er
-		}
-	}
-}
