@@ -14,6 +14,9 @@
 
 //go:build linux && !android
 
+// TODO(fortuna): remove once Linux tests are re-enabled for Ubuntu 24.
+//lint:file-ignore U1000 getter functions are only called from tests, which are temporarily disabled on Linux
+
 package sysproxy
 
 import (
