@@ -36,5 +36,5 @@ func TestNewConnectHandler(t *testing.T) {
 	req := httptest.NewRequest("CONNECT", "example.invalid:0", nil)
 	resp := httptest.NewRecorder()
 	h.ServeHTTP(resp, req)
-	require.Equal(t, 503, resp.Result().StatusCode)
+	require.Equal(t, 502, resp.Result().StatusCode)
 }

@@ -94,7 +94,7 @@ func (h *connectHandler) ServeHTTP(proxyResp http.ResponseWriter, proxyReq *http
 	var dialer transport.StreamDialer = h.dialer
 	if transportConfig := proxyReq.Header.Get("Transport"); transportConfig != "" {
 		if h.dialerFactory == nil {
-			http.Error(proxyResp, "Transport header is not supported", http.StatusBadRequest)
+			http.Error(proxyResp, "Transport header is not supported", http.StatusNotImplemented)
 			return
 		}
 		var err error
@@ -107,7 +107,7 @@ func (h *connectHandler) ServeHTTP(proxyResp http.ResponseWriter, proxyReq *http
 	}
 	targetConn, err2 := dialer.DialStream(proxyReq.Context(), proxyReq.Host)
 	if err2 != nil {
-		http.Error(proxyResp, fmt.Sprintf("Failed to connect to %v: %v", proxyReq.Host, err2), http.StatusServiceUnavailable)
+		http.Error(proxyResp, fmt.Sprintf("Failed to connect to %v: %v", proxyReq.Host, err2), http.StatusBadGateway)
 		return
 	}
 	defer targetConn.Close()
