@@ -182,7 +182,7 @@ func TestDialer_DialStream(t *testing.T) {
 		// Dial after Stop.
 		require.NoError(t, dialer.Stop())
 		require.True(t, tunnel.stopped)
-		_, err = dialer.DialStream(nil, "")
+		_, err = dialer.DialStream(context.TODO(), "")
 		require.ErrorIs(t, err, errNotStartedDial)
 	}
 }

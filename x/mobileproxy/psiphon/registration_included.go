@@ -29,7 +29,7 @@ import (
 func parsePsiphon(ctx context.Context, psiphonCfg smart.YAMLNode) (transport.StreamDialer, error) {
 	psiphonJSON, err := json.Marshal(psiphonCfg)
 	if err != nil {
-		return nil, fmt.Errorf("failed to marshal to JSON: %v, %v\n", psiphonCfg, err)
+		return nil, fmt.Errorf("failed to marshal to JSON: %v, %v", psiphonCfg, err)
 	}
 	config := &psiphon.DialerConfig{ProviderConfig: psiphonJSON}
 

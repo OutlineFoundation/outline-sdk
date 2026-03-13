@@ -34,7 +34,6 @@ var singletonDialer Dialer
 var (
 	errNotStartedDial = errors.New("dialer has not been started yet")
 	errNotStartedStop = errors.New("tried to stop dialer that is not running")
-	errAlreadyStarted = errors.New("dialer has already started")
 )
 
 // DialerConfig specifies the parameters for [Dialer].
