@@ -132,7 +132,12 @@ func SanitizeConfig(configStr string) (string, error) {
 			if err != nil {
 				return "", err
 			}
-		case "h2connect", "h3connect", "httpconnect", "override", "split", "tls", "tlsfrag":
+		case "h2connect", "h3connect", "httpconnect":
+			part, err = sanitizeConnectURL(config.URL)
+			if err != nil {
+				return "", err
+			}
+		case "override", "split", "tls", "tlsfrag":
 			// No sanitization needed
 			part = config.URL.String()
 		default:

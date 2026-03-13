@@ -68,9 +68,14 @@ Three variants are available:
 The sni parameter sets the TLS SNI. The certname parameter sets the name to validate against the server certificate.
 For h2connect, plain=true enables h2c (cleartext HTTP/2 without TLS).
 
-	httpconnect://[HOST]:[PORT][?sni=SNI][&certname=CERTNAME]
-	h2connect://[HOST]:[PORT][?sni=SNI][&certname=CERTNAME][&plain=true]
-	h3connect://[HOST]:[PORT][?sni=SNI][&certname=CERTNAME]
+Proxy authentication is supported in two ways:
+
+  - URL userinfo (user:password@host) generates a Proxy-Authorization: Basic header.
+  - The auth parameter sets the Proxy-Authorization header value directly, for other schemes such as Bearer.
+
+	httpconnect://[USER:PASS@][HOST]:[PORT][?sni=SNI][&certname=CERTNAME][&auth=TOKEN]
+	h2connect://[USER:PASS@][HOST]:[PORT][?sni=SNI][&certname=CERTNAME][&auth=TOKEN][&plain=true]
+	h3connect://[USER:PASS@][HOST]:[PORT][?sni=SNI][&certname=CERTNAME][&auth=TOKEN]
 
 # Transports
 
