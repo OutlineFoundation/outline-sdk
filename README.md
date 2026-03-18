@@ -272,3 +272,11 @@ Downloaded 10.00 MB in 1.78s
 
 Downloaded Speed: 5.61 MB/s
 ```
+
+## Resolving Access Issues
+
+The Outline SDK go packages are accessed through the vanity Go URL `golang.getoutline.org`. If you experience [issues](https://github.com/OutlineFoundation/outline-sdk/issues/571) accessing this URL on your local network you can modify the commands to access the code through `proxy.golang.org`.
+
+```console
+sudo env GOPROXY=https://proxy.golang.org go run golang.getoutline.org/sdk/x/examples/outline-cli@latest
+```

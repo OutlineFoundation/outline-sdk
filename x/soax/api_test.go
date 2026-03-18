@@ -92,15 +92,13 @@ func TestClient(t *testing.T) {
 	})
 
 	t.Run("GetRegions", func(t *testing.T) {
-		client.ConnType = ConnTypeMobile
-		regions, err := client.GetRegions(ctx, "FR", "orange")
+		regions, err := client.GetRegions(ctx, ConnTypeMobile, "FR", "orange")
 		require.NoError(t, err)
 		require.Equal(t, []string{"region1", "region2"}, regions)
 	})
 
 	t.Run("GetCities", func(t *testing.T) {
-		client.ConnType = ConnTypeResidential
-		cities, err := client.GetCities(ctx, "ES", "movistar", "md")
+		cities, err := client.GetCities(ctx, ConnTypeResidential, "ES", "movistar", "md")
 		require.NoError(t, err)
 		require.Equal(t, []string{"city1", "city2"}, cities)
 	})
