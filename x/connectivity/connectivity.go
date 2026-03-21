@@ -83,7 +83,7 @@ func TestConnectivityWithResolver(ctx context.Context, resolver dns.Resolver, te
 		return nil, fmt.Errorf("question creation failed: %w", err)
 	}
 
-	_, err = resolver.Query(ctx, *q)
+	_, err = resolver.Query(ctx, q)
 
 	if errors.Is(err, dns.ErrBadRequest) {
 		return nil, err
