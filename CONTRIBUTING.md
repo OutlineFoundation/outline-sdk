@@ -295,6 +295,63 @@ For tests:
 GOOS=windows go test -exec "wine64"  ./...
 ```
 
+### Running Windows binaries on a real Windows machine
+
+For the most accurate results, you can run Windows binaries on a real Windows machine over SSH using our convenience tool `run_on_windows.sh`.
+
+#### Set up OpenSSH on Windows
+
+<details>
+  <summary>Instructions</summary>
+
+Enable the built-in OpenSSH Server (available on Windows 10 1809 and later):
+
+1. Open **Settings** → **System** → **Optional Features** → **Add a feature**
+2. Install **OpenSSH Server**
+3. Start the service and set it to start automatically:
+
+```powershell
+Start-Service sshd
+Set-Service -Name sshd -StartupType 'Automatic'
+```
+
+After setup, verify you can connect from your macOS or Linux machine:
+
+```sh
+ssh user@<windows-ip>
+```
+
+</details>
+
+#### Run
+
+Set the `WINDOWS_HOST` environment variable to the SSH target and pass `run_on_windows.sh` as the `-exec` parameter.
+
+To run a binary:
+
+```sh
+WINDOWS_HOST=user@<windows-ip> go run -C x -exec "$(pwd)/run_on_windows.sh" ./examples/test-connectivity
+```
+
+For tests:
+
+```sh
+WINDOWS_HOST=user@<windows-ip> go test -C x -exec "$(pwd)/run_on_windows.sh" ./...
+```
+
+<details>
+  <summary>Details and direct invocation</summary>
+
+The `run_on_windows.sh` script uses SSH and SCP to run the binary on a connected Windows machine. You must have `ssh` and `scp` in your `PATH`.
+
+The script will:
+1. Create a temporary directory on the Windows machine (`%TEMP%\outline_<random>`).
+2. Copy the binary to that directory via `scp`.
+3. Execute the binary on the Windows machine with the provided arguments.
+4. Remove the temporary directory after execution.
+
+</details>
+
 ## Testing
 
 All new code must be accompanied by tests. Tests should be placed in `_test.go` files alongside the code they are testing.
