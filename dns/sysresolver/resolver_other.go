@@ -78,7 +78,7 @@ func lookupAddrs(ctx context.Context, q dnsmessage.Question, network string) (*d
 				Name:  q.Name,
 				Type:  q.Type,
 				Class: q.Class,
-				TTL:   0,
+				TTL:   0, // net.DefaultResolver does not expose per-record TTL
 			},
 			Body: body,
 		})

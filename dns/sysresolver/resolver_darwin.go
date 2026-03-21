@@ -170,6 +170,9 @@ func NewResolver() dns.Resolver {
 			pollTimeout := maxPollMs
 			if deadline, ok := ctx.Deadline(); ok {
 				if ms := int(time.Until(deadline).Milliseconds()); ms < pollTimeout {
+					if ms < 0 {
+						ms = 0 // deadline already passed; let Poll return immediately
+					}
 					pollTimeout = ms
 				}
 			}

@@ -54,21 +54,38 @@ func NewResolver() dns.Resolver {
 		// close the fd, so we must always close it ourselves.
 		defer unix.Close(int(fd))
 
-		timeout := -1
-		if deadline, ok := ctx.Deadline(); ok {
-			timeout = int(time.Until(deadline).Milliseconds())
-		}
-		nReady, err := unix.Poll([]unix.PollFd{{Fd: int32(fd), Events: unix.EPOLLIN | unix.EPOLLERR}}, timeout)
-		if err != nil {
-			return nil, err
-		}
-		if nReady == 0 {
-			return nil, context.DeadlineExceeded
+		// Cap at 100ms so a cancelled context with no deadline is detected
+		// promptly. The loop re-checks ctx.Done() after each Poll timeout.
+		const maxPollMs = 100
+		for {
+			pollTimeout := maxPollMs
+			if deadline, ok := ctx.Deadline(); ok {
+				if ms := int(time.Until(deadline).Milliseconds()); ms < pollTimeout {
+					if ms < 0 {
+						ms = 0 // deadline already passed; let Poll return immediately
+					}
+					pollTimeout = ms
+				}
+			}
+			// Use poll(2) constants (POLLIN/POLLERR/POLLHUP), not epoll constants.
+			nReady, err := unix.Poll([]unix.PollFd{{Fd: int32(fd), Events: unix.POLLIN | unix.POLLERR | unix.POLLHUP}}, pollTimeout)
+			if err != nil {
+				return nil, err
+			}
+			if nReady > 0 {
+				break
+			}
+			// Poll timed out; check context before looping.
+			if ctx.Err() != nil {
+				return nil, ctx.Err()
+			}
 		}
 
 		// 4096 bytes covers the vast majority of real-world DNS responses,
 		// including DNSSEC and large TXT records.
 		answer := make([]byte, 4096)
+		// rcode is a required output parameter of android_res_nresult; the
+		// DNS RCODE is already encoded in the wire-format message we unpack.
 		var rcode C.int
 		// android_res_nresult copies the DNS response into answer.
 		// https://developer.android.com/ndk/reference/group/networking#android_res_nresult
