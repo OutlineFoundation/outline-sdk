@@ -16,6 +16,7 @@ package sysresolver
 
 import (
 	"fmt"
+	"strings"
 
 	"golang.org/x/net/dns/dnsmessage"
 )
@@ -66,7 +67,7 @@ func resourceBodyFromRData(rrtype dnsmessage.Type, rdata []byte) dnsmessage.Reso
 // Pointer compression (0xC0 prefix) is rejected since rdata from native OS
 // callbacks is not part of a full DNS message.
 func parseDNSLabels(data []byte) (dnsmessage.Name, error) {
-	var name string
+	var b strings.Builder
 	remaining := data
 	for len(remaining) > 0 {
 		labelLen := int(remaining[0])
@@ -79,13 +80,14 @@ func parseDNSLabels(data []byte) (dnsmessage.Name, error) {
 		if labelLen+1 > len(remaining) {
 			return dnsmessage.Name{}, fmt.Errorf("label length %d overflows data", labelLen)
 		}
-		name += string(remaining[1:labelLen+1]) + "."
+		b.Write(remaining[1 : labelLen+1])
+		b.WriteByte('.')
 		remaining = remaining[labelLen+1:]
 	}
-	if name == "" {
-		name = "."
+	if b.Len() == 0 {
+		b.WriteByte('.')
 	}
-	return dnsmessage.NewName(name)
+	return dnsmessage.NewName(b.String())
 }
 
 // parseTXTRData parses the rdata of a TXT record, which is a sequence of

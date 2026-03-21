@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//go:build android
+//go:build android && cgo
 
 // Uses android_res_nquery from the Android NDK to query the system resolver.
 // This leverages the system's DNS cache and respects per-network DNS settings.
@@ -50,6 +50,9 @@ func NewResolver() dns.Resolver {
 		if fd < 0 {
 			return nil, unix.Errno(-fd)
 		}
+		// Close the fd on all paths. android_res_nresult reads but does not
+		// close the fd, so we must always close it ourselves.
+		defer unix.Close(int(fd))
 
 		timeout := -1
 		if deadline, ok := ctx.Deadline(); ok {
@@ -63,7 +66,9 @@ func NewResolver() dns.Resolver {
 			return nil, context.DeadlineExceeded
 		}
 
-		answer := make([]byte, 1500)
+		// 4096 bytes covers the vast majority of real-world DNS responses,
+		// including DNSSEC and large TXT records.
+		answer := make([]byte, 4096)
 		var rcode C.int
 		// android_res_nresult copies the DNS response into answer.
 		// https://developer.android.com/ndk/reference/group/networking#android_res_nresult

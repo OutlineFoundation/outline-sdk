@@ -55,7 +55,9 @@ func NewResolver() dns.Resolver {
 			cQname := C.CString(qname)
 			defer C.free(unsafe.Pointer(cQname))
 
-			answer := make([]byte, 1500)
+			// 4096 bytes covers the vast majority of real-world DNS responses,
+			// including DNSSEC and large TXT records.
+			answer := make([]byte, 4096)
 			// res_query is blocking and returns -1 on error.
 			n := C.res_query(
 				cQname,

@@ -30,8 +30,6 @@ import (
 	"golang.org/x/net/dns/dnsmessage"
 )
 
-var defaultResolver = net.DefaultResolver
-
 // ErrUnsupported is returned when the current platform's fallback resolver
 // does not support the requested DNS record type.
 var ErrUnsupported = errors.New("record type not supported by fallback resolver")
@@ -88,8 +86,8 @@ func lookupAddrs(ctx context.Context, q dnsmessage.Question, network string) (*d
 	return msg, nil
 }
 
-// defaultLookupNetIP wraps net.DefaultResolver.LookupNetIP. Defined as a
-// variable to allow overriding in tests.
+// defaultLookupNetIP is set to net.DefaultResolver.LookupNetIP. It is a
+// variable so tests can substitute a fake without making network calls.
 var defaultLookupNetIP = func(ctx context.Context, network, host string) ([]netip.Addr, error) {
-	return defaultResolver.LookupNetIP(ctx, network, host)
+	return net.DefaultResolver.LookupNetIP(ctx, network, host)
 }

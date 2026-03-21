@@ -164,9 +164,14 @@ func NewResolver() dns.Resolver {
 			default:
 			}
 
-			pollTimeout := -1
+			// Cap at 100ms so a cancelled context with no deadline is
+			// detected promptly even without a self-pipe or eventfd.
+			const maxPollMs = 100
+			pollTimeout := maxPollMs
 			if deadline, ok := ctx.Deadline(); ok {
-				pollTimeout = int(time.Until(deadline).Milliseconds())
+				if ms := int(time.Until(deadline).Milliseconds()); ms < pollTimeout {
+					pollTimeout = ms
+				}
 			}
 			nReady, err := unix.Poll(
 				[]unix.PollFd{{Fd: int32(fd), Events: unix.POLLIN | unix.POLLERR | unix.POLLHUP}},
@@ -176,7 +181,11 @@ func NewResolver() dns.Resolver {
 				return nil, err
 			}
 			if nReady == 0 {
-				return nil, context.DeadlineExceeded
+				// Check whether the context expired; if not, loop and poll again.
+				if ctx.Err() != nil {
+					return nil, ctx.Err()
+				}
+				continue
 			}
 
 			// Process the pending result; this invokes goDNSServiceQueryRecordReply.
