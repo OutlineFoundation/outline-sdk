@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//go:build !android && !(cgo && (linux || freebsd || openbsd || netbsd || dragonfly || solaris)) && !(darwin && cgo)
+//go:build !android && !(cgo && (linux || freebsd || openbsd || netbsd || dragonfly || solaris)) && !(darwin && cgo) && !windows
 
 // Fallback resolver using net.DefaultResolver. Only A and AAAA record types
 // are supported. Other record types return [ErrUnsupported].

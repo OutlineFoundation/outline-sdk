@@ -19,6 +19,7 @@
 //   - Android: uses android_res_nquery (NDK), requires CGO
 //   - macOS/iOS: uses dns_sd (DNS Service Discovery), requires CGO
 //   - Linux and other Unix with CGO: uses libresolv
+//   - Windows: uses DnsQueryEx from dnsapi.dll (no CGO required)
 //   - Other: uses [net.DefaultResolver] (A and AAAA records only)
 //
 // All implementations return the full [dnsmessage.Message], so callers can
