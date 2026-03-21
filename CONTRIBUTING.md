@@ -297,7 +297,34 @@ GOOS=windows go test -exec "wine64"  ./...
 
 ### Running Windows binaries on a real Windows machine
 
-For the most accurate results, you can run Windows binaries on a real Windows machine over SSH using our convenience tool `run_on_windows.sh`.
+For the most accurate results, you can run Windows binaries on a real Windows machine over SSH using our convenience tool `run_on_windows.sh`. A Windows VM running locally works just as well as a physical machine.
+
+#### Get a Windows VM
+
+<details>
+  <summary>Instructions</summary>
+
+Microsoft provides free pre-built Windows 11 VMs (valid for 90 days) for VirtualBox, VMware, Parallels, and Hyper-V at:
+
+https://developer.microsoft.com/en-us/windows/downloads/virtual-machines/
+
+Choose the image that matches your hypervisor:
+
+| Platform | Hypervisor |
+|----------|------------|
+| macOS (Intel) | VirtualBox (free), VMware Fusion (free for personal use), Parallels (paid) |
+| macOS (Apple Silicon) | UTM (free), Parallels (paid) |
+| Linux | VirtualBox (free), QEMU/KVM with virt-manager (free) |
+
+Once the VM is running, find its IP address from within the VM:
+
+```powershell
+ipconfig
+```
+
+Or from your host machine via your hypervisor's network settings.
+
+</details>
 
 #### Set up OpenSSH on Windows
 
