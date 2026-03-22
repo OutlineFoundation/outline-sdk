@@ -312,8 +312,8 @@ Choose the image that matches your hypervisor:
 
 | Platform | Hypervisor |
 |----------|------------|
-| macOS (Intel) | VirtualBox (free), VMware Fusion (free for personal use), Parallels (paid) |
-| macOS (Apple Silicon) | UTM (free), Parallels (paid) |
+| macOS (Intel) | VirtualBox (free), VMware Fusion (free for personal use), QEMU with HVF acceleration (free), Parallels (paid) |
+| macOS (Apple Silicon) | UTM/QEMU (free, x86 emulation is slow on ARM), Parallels (paid) |
 | Linux | VirtualBox (free), QEMU/KVM with virt-manager (free) |
 
 Once the VM is running, find its IP address from within the VM:
