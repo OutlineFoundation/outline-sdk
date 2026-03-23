@@ -127,17 +127,22 @@ func NewQuestion(domain string, qtype dnsmessage.Type) (*dnsmessage.Question, er
 // for the IPv6 and UDP headers".
 const maxUDPMessageSize = 1232
 
-// appendRequest appends the bytes of a DNS request for the given name and type to buf.
-func appendRequest(id uint16, name string, qtype uint16, buf []byte) ([]byte, error) {
+// makeQuestion constructs a dnsmessage.Question from a plain name and record type.
+func makeQuestion(name string, qtype uint16) (dnsmessage.Question, error) {
 	q, err := NewQuestion(name, dnsmessage.Type(qtype))
 	if err != nil {
-		return nil, fmt.Errorf("invalid question: %w", err)
+		return dnsmessage.Question{}, err
 	}
+	return *q, nil
+}
+
+// appendRequest appends the bytes a DNS request using the id and question to buf.
+func appendRequest(id uint16, q dnsmessage.Question, buf []byte) ([]byte, error) {
 	b := dnsmessage.NewBuilder(buf, dnsmessage.Header{ID: id, RecursionDesired: true})
 	if err := b.StartQuestions(); err != nil {
 		return nil, fmt.Errorf("start questions failed: %w", err)
 	}
-	if err := b.Question(*q); err != nil {
+	if err := b.Question(q); err != nil {
 		return nil, fmt.Errorf("add question failed: %w", err)
 	}
 	if err := b.StartAdditionals(); err != nil {
@@ -153,7 +158,7 @@ func appendRequest(id uint16, name string, qtype uint16, buf []byte) ([]byte, er
 		return nil, fmt.Errorf("add OPT RR failed: %w", err)
 	}
 
-	buf, err = b.Finish()
+	buf, err := b.Finish()
 	if err != nil {
 		return nil, fmt.Errorf("message serialization failed: %w", err)
 	}
@@ -182,7 +187,7 @@ func equalASCIIName(x, y dnsmessage.Name) bool {
 	return true
 }
 
-func checkResponse(reqID uint16, name string, qtype uint16, respHdr dnsmessage.Header, respQs []dnsmessage.Question) error {
+func checkResponse(reqID uint16, reqQues dnsmessage.Question, respHdr dnsmessage.Header, respQs []dnsmessage.Question) error {
 	if !respHdr.Response {
 		return errors.New("response bit not set")
 	}
@@ -197,11 +202,7 @@ func checkResponse(reqID uint16, name string, qtype uint16, respHdr dnsmessage.H
 		return errors.New("response had no questions")
 	}
 	respQ := respQs[0]
-	reqName, err := NewQuestion(name, dnsmessage.Type(qtype))
-	if err != nil {
-		return fmt.Errorf("invalid request name: %w", err)
-	}
-	if dnsmessage.Type(qtype) != respQ.Type || dnsmessage.ClassINET != respQ.Class || !equalASCIIName(reqName.Name, respQ.Name) {
+	if reqQues.Type != respQ.Type || reqQues.Class != respQ.Class || !equalASCIIName(reqQues.Name, respQ.Name) {
 		return errors.New("response question doesn't match request")
 	}
 
@@ -212,10 +213,14 @@ func checkResponse(reqID uint16, name string, qtype uint16, respHdr dnsmessage.H
 // It validates the response ID and question echo before returning raw wire-format bytes.
 func queryDatagram(conn io.ReadWriter, name string, qtype uint16) ([]byte, error) {
 	// Reference: https://cs.opensource.google/go/go/+/master:src/net/dnsclient_unix.go?q=func:dnsPacketRoundTrip&ss=go%2Fgo
-	id := uint16(rand.Uint32())
-	buf, err := appendRequest(id, name, qtype, make([]byte, 0, maxUDPMessageSize))
+	q, err := makeQuestion(name, qtype)
 	if err != nil {
-		return nil, &nestedError{ErrBadRequest, err}
+		return nil, &nestedError{ErrBadRequest, fmt.Errorf("invalid question: %w", err)}
+	}
+	id := uint16(rand.Uint32())
+	buf, err := appendRequest(id, q, make([]byte, 0, maxUDPMessageSize))
+	if err != nil {
+		return nil, &nestedError{ErrBadRequest, fmt.Errorf("append request failed: %w", err)}
 	}
 	if _, err := conn.Write(buf); err != nil {
 		return nil, &nestedError{ErrSend, err}
@@ -237,7 +242,7 @@ func queryDatagram(conn io.ReadWriter, name string, qtype uint16) ([]byte, error
 			// Ignore invalid packets that fail to parse. It could be injected.
 			continue
 		}
-		if err := checkResponse(id, name, qtype, msg.Header, msg.Questions); err != nil {
+		if err := checkResponse(id, q, msg.Header, msg.Questions); err != nil {
 			returnErr = errors.Join(returnErr, err)
 			continue
 		}
@@ -251,8 +256,12 @@ func queryDatagram(conn io.ReadWriter, name string, qtype uint16) ([]byte, error
 // It validates the response ID and question echo before returning raw wire-format bytes.
 func queryStream(conn io.ReadWriter, name string, qtype uint16) ([]byte, error) {
 	// Reference: https://cs.opensource.google/go/go/+/master:src/net/dnsclient_unix.go?q=func:dnsStreamRoundTrip&ss=go%2Fgo
+	q, err := makeQuestion(name, qtype)
+	if err != nil {
+		return nil, &nestedError{ErrBadRequest, fmt.Errorf("invalid question: %w", err)}
+	}
 	id := uint16(rand.Uint32())
-	buf, err := appendRequest(id, name, qtype, make([]byte, 2, 514))
+	buf, err := appendRequest(id, q, make([]byte, 2, 514))
 	if err != nil {
 		return nil, &nestedError{ErrBadRequest, err}
 	}
@@ -284,7 +293,7 @@ func queryStream(conn io.ReadWriter, name string, qtype uint16) ([]byte, error) 
 	if err = msg.Unpack(buf); err != nil {
 		return nil, &nestedError{ErrBadResponse, fmt.Errorf("response failed to unpack: %w", err)}
 	}
-	if err := checkResponse(id, name, qtype, msg.Header, msg.Questions); err != nil {
+	if err := checkResponse(id, q, msg.Header, msg.Questions); err != nil {
 		return nil, &nestedError{ErrBadResponse, err}
 	}
 	return buf, nil
@@ -426,7 +435,11 @@ func NewHTTPSRawResolver(sd transport.StreamDialer, resolverAddr string, url str
 	return FuncRawResolver(func(ctx context.Context, name string, qtype uint16) ([]byte, error) {
 		// Prepare request.
 		// DoH uses ID=0 per RFC 8484.
-		buf, err := appendRequest(0, name, qtype, make([]byte, 0, 512))
+		q, err := makeQuestion(name, qtype)
+		if err != nil {
+			return nil, &nestedError{ErrBadRequest, fmt.Errorf("invalid question: %w", err)}
+		}
+		buf, err := appendRequest(0, q, make([]byte, 0, 512))
 		if err != nil {
 			return nil, &nestedError{ErrBadRequest, err}
 		}
@@ -457,7 +470,7 @@ func NewHTTPSRawResolver(sd transport.StreamDialer, resolverAddr string, url str
 		if err = msg.Unpack(response); err != nil {
 			return nil, &nestedError{ErrBadResponse, fmt.Errorf("failed to unpack DNS response: %w", err)}
 		}
-		if err := checkResponse(0, name, qtype, msg.Header, msg.Questions); err != nil {
+		if err := checkResponse(0, q, msg.Header, msg.Questions); err != nil {
 			return nil, &nestedError{ErrBadResponse, err}
 		}
 		return response, nil
