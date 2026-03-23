@@ -127,12 +127,12 @@ var dnsQueryCallback = syscall.NewCallback(func(pQueryContext, _ uintptr) uintpt
 	return 0
 })
 
-// NewResolver returns a [dns.Resolver] that queries the Windows system resolver
-// via DnsQueryEx, supporting arbitrary DNS record types and using async
-// completion so no OS thread is blocked during the query.
-func NewResolver() dns.Resolver {
-	return dns.FuncResolver(func(ctx context.Context, q dnsmessage.Question) (*dnsmessage.Message, error) {
-		nameUTF16, err := windows.UTF16PtrFromString(q.Name.String())
+// NewRawResolver returns a [dns.RawResolver] that queries the Windows system resolver
+// via DnsQueryEx, returning raw DNS wire-format bytes for any record type.
+// Callers can parse the response with any DNS library.
+func NewRawResolver() dns.RawResolver {
+	return dns.FuncRawResolver(func(ctx context.Context, name string, qtype uint16) ([]byte, error) {
+		nameUTF16, err := windows.UTF16PtrFromString(name)
 		if err != nil {
 			return nil, fmt.Errorf("invalid DNS name: %w", err)
 		}
@@ -149,7 +149,7 @@ func NewResolver() dns.Resolver {
 		req := dnsQueryRequest{
 			version:      dnsQueryRequestVersion1,
 			queryName:    nameUTF16,
-			queryType:    uint16(q.Type),
+			queryType:    qtype,
 			queryOptions: dnsQueryStandard,
 			callback:     dnsQueryCallback,
 			queryContext: uintptr(unsafe.Pointer(state)),
@@ -165,7 +165,7 @@ func NewResolver() dns.Resolver {
 
 		if status != dnsRequestPending {
 			// Completed inline: callback will NOT be called. state.result is final.
-			return dnsStatusToMessage(q, int32(status), state.result.pQueryRecords)
+			return dnsStatusToRaw(name, qtype, int32(status), state.result.pQueryRecords)
 		}
 
 		// Query is pending: wait for the callback to signal the event.
@@ -192,19 +192,23 @@ func NewResolver() dns.Resolver {
 			return nil, context.DeadlineExceeded
 		}
 
-		return dnsStatusToMessage(q, state.result.queryStatus, state.result.pQueryRecords)
+		return dnsStatusToRaw(name, qtype, state.result.queryStatus, state.result.pQueryRecords)
 	})
 }
 
-// dnsStatusToMessage turns a final DNS_STATUS and record list into a message.
-func dnsStatusToMessage(q dnsmessage.Question, status int32, records uintptr) (*dnsmessage.Message, error) {
+// dnsStatusToRaw turns a final DNS_STATUS and record list into raw wire-format bytes.
+func dnsStatusToRaw(name string, qtype uint16, status int32, records uintptr) ([]byte, error) {
 	if records != 0 {
 		defer procDnsRecordListFree.Call(records, dnsFreeRecordList)
 	}
 	if status != 0 {
 		return nil, fmt.Errorf("DnsQueryEx: status %d", status)
 	}
-	return dnsRecordsToMessage(q, records), nil
+	q, err := dns.NewQuestion(name, dnsmessage.Type(qtype))
+	if err != nil {
+		return nil, fmt.Errorf("invalid DNS name: %w", err)
+	}
+	return dnsRecordsToMessage(*q, records).Pack()
 }
 
 // dnsRecordsToMessage walks the DNS_RECORD linked list and builds a message.

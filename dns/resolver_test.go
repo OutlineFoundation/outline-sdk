@@ -200,18 +200,18 @@ func newMessageResponse(req dnsmessage.Message, answer dnsmessage.ResourceBody, 
 }
 
 type queryResult struct {
-	msg *dnsmessage.Message
-	err error
+	data []byte
+	err  error
 }
 
-func testDatagramExchange(t *testing.T, server func(request dnsmessage.Message, conn net.Conn)) (*dnsmessage.Message, error) {
+func testDatagramExchange(t *testing.T, server func(request dnsmessage.Message, conn net.Conn)) ([]byte, error) {
 	front, back := net.Pipe()
 	q, err := NewQuestion("example.com.", dnsmessage.TypeAAAA)
 	require.NoError(t, err)
 	clientDone := make(chan queryResult)
 	go func() {
-		msg, err := queryDatagram(front, *q)
-		clientDone <- queryResult{msg, err}
+		data, err := queryDatagram(front, "example.com.", uint16(dnsmessage.TypeAAAA))
+		clientDone <- queryResult{data, err}
 	}()
 	// Read request.
 	buf := make([]byte, 512)
@@ -229,13 +229,13 @@ func testDatagramExchange(t *testing.T, server func(request dnsmessage.Message, 
 	server(reqMsg, back)
 
 	result := <-clientDone
-	return result.msg, result.err
+	return result.data, result.err
 }
 
 func Test_queryDatagram(t *testing.T) {
 	t.Run("Success", func(t *testing.T) {
 		var respSent dnsmessage.Message
-		respRcvd, err := testDatagramExchange(t, func(req dnsmessage.Message, conn net.Conn) {
+		rawResp, err := testDatagramExchange(t, func(req dnsmessage.Message, conn net.Conn) {
 			// Send bogus response.
 			_, err := conn.Write([]byte{0, 0})
 			require.NoError(t, err)
@@ -259,8 +259,10 @@ func Test_queryDatagram(t *testing.T) {
 			require.NoError(t, err)
 		})
 		require.NoError(t, err)
-		require.NotNil(t, respRcvd)
-		require.Equal(t, respSent, *respRcvd)
+		require.NotNil(t, rawResp)
+		var respRcvd dnsmessage.Message
+		require.NoError(t, respRcvd.Unpack(rawResp))
+		require.Equal(t, respSent, respRcvd)
 	})
 	t.Run("BadResponse", func(t *testing.T) {
 		_, err := testDatagramExchange(t, func(req dnsmessage.Message, conn net.Conn) {
@@ -277,12 +279,10 @@ func Test_queryDatagram(t *testing.T) {
 	t.Run("FailedClientWrite", func(t *testing.T) {
 		front, back := net.Pipe()
 		back.Close()
-		q, err := NewQuestion("example.com.", dnsmessage.TypeAAAA)
-		require.NoError(t, err)
 		clientDone := make(chan queryResult)
 		go func() {
-			msg, err := queryDatagram(front, *q)
-			clientDone <- queryResult{msg, err}
+			data, err := queryDatagram(front, "example.com.", uint16(dnsmessage.TypeAAAA))
+			clientDone <- queryResult{data, err}
 		}()
 		// Wait for queryDatagram.
 		result := <-clientDone
@@ -291,12 +291,10 @@ func Test_queryDatagram(t *testing.T) {
 	})
 	t.Run("FailedClientRead", func(t *testing.T) {
 		front, back := net.Pipe()
-		q, err := NewQuestion("example.com.", dnsmessage.TypeAAAA)
-		require.NoError(t, err)
 		clientDone := make(chan queryResult)
 		go func() {
-			msg, err := queryDatagram(front, *q)
-			clientDone <- queryResult{msg, err}
+			data, err := queryDatagram(front, "example.com.", uint16(dnsmessage.TypeAAAA))
+			clientDone <- queryResult{data, err}
 		}()
 		back.Read(make([]byte, 521))
 		back.Close()
@@ -307,14 +305,14 @@ func Test_queryDatagram(t *testing.T) {
 	})
 }
 
-func testStreamExchange(t *testing.T, server func(request dnsmessage.Message, conn net.Conn)) (*dnsmessage.Message, error) {
+func testStreamExchange(t *testing.T, server func(request dnsmessage.Message, conn net.Conn)) ([]byte, error) {
 	front, back := net.Pipe()
 	q, err := NewQuestion("example.com.", dnsmessage.TypeAAAA)
 	require.NoError(t, err)
 	clientDone := make(chan queryResult)
 	go func() {
-		msg, err := queryStream(front, *q)
-		clientDone <- queryResult{msg, err}
+		data, err := queryStream(front, "example.com.", uint16(dnsmessage.TypeAAAA))
+		clientDone <- queryResult{data, err}
 	}()
 	// Read request.
 	var msgLen uint16
@@ -334,13 +332,13 @@ func testStreamExchange(t *testing.T, server func(request dnsmessage.Message, co
 	server(reqMsg, back)
 
 	result := <-clientDone
-	return result.msg, result.err
+	return result.data, result.err
 }
 
 func Test_queryStream(t *testing.T) {
 	t.Run("Success", func(t *testing.T) {
 		var respSent dnsmessage.Message
-		respRcvd, err := testStreamExchange(t, func(req dnsmessage.Message, conn net.Conn) {
+		rawResp, err := testStreamExchange(t, func(req dnsmessage.Message, conn net.Conn) {
 			var err error
 			// Prepare response message.
 			respSent, err = newMessageResponse(req, &dnsmessage.AAAAResource{AAAA: [16]byte(net.IPv6loopback)}, 100)
@@ -354,8 +352,10 @@ func Test_queryStream(t *testing.T) {
 			require.NoError(t, err)
 		})
 		require.NoError(t, err)
-		require.NotNil(t, respRcvd)
-		require.Equal(t, respSent, *respRcvd)
+		require.NotNil(t, rawResp)
+		var respRcvd dnsmessage.Message
+		require.NoError(t, respRcvd.Unpack(rawResp))
+		require.Equal(t, respSent, respRcvd)
 	})
 	t.Run("ShortRead", func(t *testing.T) {
 		_, err := testStreamExchange(t, func(req dnsmessage.Message, conn net.Conn) {
@@ -412,12 +412,10 @@ func Test_queryStream(t *testing.T) {
 	t.Run("FailedClientWrite", func(t *testing.T) {
 		front, back := net.Pipe()
 		back.Close()
-		q, err := NewQuestion("example.com.", dnsmessage.TypeAAAA)
-		require.NoError(t, err)
 		clientDone := make(chan queryResult)
 		go func() {
-			msg, err := queryStream(front, *q)
-			clientDone <- queryResult{msg, err}
+			data, err := queryStream(front, "example.com.", uint16(dnsmessage.TypeAAAA))
+			clientDone <- queryResult{data, err}
 		}()
 		// Wait for client.
 		result := <-clientDone
@@ -426,12 +424,10 @@ func Test_queryStream(t *testing.T) {
 	})
 	t.Run("FailedClientRead", func(t *testing.T) {
 		front, back := net.Pipe()
-		q, err := NewQuestion("example.com.", dnsmessage.TypeAAAA)
-		require.NoError(t, err)
 		clientDone := make(chan queryResult)
 		go func() {
-			msg, err := queryStream(front, *q)
-			clientDone <- queryResult{msg, err}
+			data, err := queryStream(front, "example.com.", uint16(dnsmessage.TypeAAAA))
+			clientDone <- queryResult{data, err}
 		}()
 		back.Read(make([]byte, 521))
 		back.Close()

@@ -32,21 +32,21 @@ import (
 	"unsafe"
 
 	"golang.getoutline.org/sdk/dns"
-	"golang.org/x/net/dns/dnsmessage"
 	"golang.org/x/sys/unix"
 )
 
-// NewResolver returns a [dns.Resolver] that uses the Android system resolver
-// via android_res_nquery, supporting arbitrary DNS record types.
-func NewResolver() dns.Resolver {
-	return dns.FuncResolver(func(ctx context.Context, q dnsmessage.Question) (*dnsmessage.Message, error) {
-		qname := q.Name.String()
-		cQname := C.CString(qname)
+// NewRawResolver returns a [dns.RawResolver] that uses the Android system resolver
+// via android_res_nquery, returning raw DNS wire-format bytes.
+// Callers can parse the response with any DNS library.
+func NewRawResolver() dns.RawResolver {
+	return dns.FuncRawResolver(func(ctx context.Context, name string, qtype uint16) ([]byte, error) {
+		cQname := C.CString(name)
 		defer C.free(unsafe.Pointer(cQname))
 
 		// android_res_nquery returns a file descriptor for the pending query.
 		// https://developer.android.com/ndk/reference/group/networking#android_res_nquery
-		fd := C.android_res_nquery(0, cQname, C.int(dnsmessage.ClassINET), C.int(q.Type), 0)
+		// Class 1 = ClassINET (RFC 1035).
+		fd := C.android_res_nquery(0, cQname, C.int(1), C.int(qtype), 0)
 		if fd < 0 {
 			return nil, unix.Errno(-fd)
 		}
@@ -85,7 +85,7 @@ func NewResolver() dns.Resolver {
 		// including DNSSEC and large TXT records.
 		answer := make([]byte, 4096)
 		// rcode is a required output parameter of android_res_nresult; the
-		// DNS RCODE is already encoded in the wire-format message we unpack.
+		// DNS RCODE is already encoded in the wire-format message we return.
 		var rcode C.int
 		// android_res_nresult copies the DNS response into answer.
 		// https://developer.android.com/ndk/reference/group/networking#android_res_nresult
@@ -94,10 +94,6 @@ func NewResolver() dns.Resolver {
 			return nil, unix.Errno(-n)
 		}
 
-		var msg dnsmessage.Message
-		if err := msg.Unpack(answer[:n]); err != nil {
-			return nil, err
-		}
-		return &msg, nil
+		return answer[:n], nil
 	})
 }

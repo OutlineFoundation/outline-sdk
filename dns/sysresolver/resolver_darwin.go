@@ -46,6 +46,9 @@ import (
 
 // callbackState is shared between the CGO callback and the Go query goroutine.
 type callbackState struct {
+	// qtype is the DNS record type being queried, used to detect when a final
+	// answer has arrived (as opposed to intermediate CNAME records).
+	qtype    dnsmessage.Type
 	response dnsmessage.Message
 	// done is closed when the final answer for the queried type has arrived.
 	done chan struct{}
@@ -103,9 +106,8 @@ func goDNSServiceQueryRecordReply(
 	// (CNAME chains may arrive first with MoreComing=0 before the actual answer).
 	if flags&C.kDNSServiceFlagsMoreComing == 0 {
 		// Check if we have a record of the queried type (not just CNAME intermediates).
-		qtype := dnsmessage.Type(state.response.Questions[0].Type)
 		for _, ans := range state.response.Answers {
-			if ans.Header.Type == qtype {
+			if ans.Header.Type == state.qtype {
 				select {
 				case state.done <- struct{}{}:
 				default:
@@ -116,15 +118,22 @@ func goDNSServiceQueryRecordReply(
 	}
 }
 
-// NewResolver returns a [dns.Resolver] that uses the macOS/iOS dns_sd API,
-// supporting arbitrary DNS record types and leveraging the system DNS cache.
-func NewResolver() dns.Resolver {
-	return dns.FuncResolver(func(ctx context.Context, q dnsmessage.Question) (*dnsmessage.Message, error) {
+// NewRawResolver returns a [dns.RawResolver] that uses the macOS/iOS dns_sd API,
+// returning raw DNS wire-format bytes for any record type.
+// Callers can parse the response with any DNS library.
+func NewRawResolver() dns.RawResolver {
+	return dns.FuncRawResolver(func(ctx context.Context, name string, qtype uint16) ([]byte, error) {
+		q, err := dns.NewQuestion(name, dnsmessage.Type(qtype))
+		if err != nil {
+			return nil, fmt.Errorf("invalid DNS name: %w", err)
+		}
+
 		state := &callbackState{
-			done: make(chan struct{}, 1),
+			qtype: dnsmessage.Type(qtype),
+			done:  make(chan struct{}, 1),
 		}
 		state.response.Header.Response = true
-		state.response.Questions = []dnsmessage.Question{q}
+		state.response.Questions = []dnsmessage.Question{*q}
 
 		cQname := C.CString(q.Name.String())
 		defer C.free(unsafe.Pointer(cQname))
@@ -160,7 +169,7 @@ func NewResolver() dns.Resolver {
 			case <-ctx.Done():
 				return nil, ctx.Err()
 			case <-state.done:
-				return &state.response, nil
+				return state.response.Pack()
 			default:
 			}
 

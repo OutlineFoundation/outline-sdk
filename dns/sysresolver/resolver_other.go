@@ -34,23 +34,29 @@ import (
 // does not support the requested DNS record type.
 var ErrUnsupported = errors.New("record type not supported by fallback resolver")
 
-// NewResolver returns a [dns.Resolver] backed by [net.DefaultResolver].
+// NewRawResolver returns a [dns.RawResolver] backed by [net.DefaultResolver],
+// returning raw DNS wire-format bytes.
 // Only [dnsmessage.TypeA] and [dnsmessage.TypeAAAA] are supported on this platform.
 // For full record-type support, use a platform with CGO enabled.
-func NewResolver() dns.Resolver {
-	return dns.FuncResolver(func(ctx context.Context, q dnsmessage.Question) (*dnsmessage.Message, error) {
-		switch q.Type {
+func NewRawResolver() dns.RawResolver {
+	return dns.FuncRawResolver(func(ctx context.Context, name string, qtype uint16) ([]byte, error) {
+		switch dnsmessage.Type(qtype) {
 		case dnsmessage.TypeA:
-			return lookupAddrs(ctx, q, "ip4")
+			return lookupRaw(ctx, name, qtype, "ip4")
 		case dnsmessage.TypeAAAA:
-			return lookupAddrs(ctx, q, "ip6")
+			return lookupRaw(ctx, name, qtype, "ip6")
 		default:
-			return nil, fmt.Errorf("%w: %v", ErrUnsupported, q.Type)
+			return nil, fmt.Errorf("%w: %v", ErrUnsupported, dnsmessage.Type(qtype))
 		}
 	})
 }
 
-func lookupAddrs(ctx context.Context, q dnsmessage.Question, network string) (*dnsmessage.Message, error) {
+func lookupRaw(ctx context.Context, name string, qtype uint16, network string) ([]byte, error) {
+	q, err := dns.NewQuestion(name, dnsmessage.Type(qtype))
+	if err != nil {
+		return nil, err
+	}
+
 	// Strip trailing dot for net.DefaultResolver.
 	host := q.Name.String()
 	if len(host) > 0 && host[len(host)-1] == '.' {
@@ -63,8 +69,8 @@ func lookupAddrs(ctx context.Context, q dnsmessage.Question, network string) (*d
 	}
 
 	msg := &dnsmessage.Message{
-		Header: dnsmessage.Header{Response: true},
-		Questions: []dnsmessage.Question{q},
+		Header:    dnsmessage.Header{Response: true},
+		Questions: []dnsmessage.Question{*q},
 	}
 	for _, addr := range addrs {
 		var body dnsmessage.ResourceBody
@@ -83,7 +89,7 @@ func lookupAddrs(ctx context.Context, q dnsmessage.Question, network string) (*d
 			Body: body,
 		})
 	}
-	return msg, nil
+	return msg.Pack()
 }
 
 // defaultLookupNetIP is set to net.DefaultResolver.LookupNetIP. It is a

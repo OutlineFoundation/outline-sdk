@@ -37,32 +37,32 @@ import (
 	"unsafe"
 
 	"golang.getoutline.org/sdk/dns"
-	"golang.org/x/net/dns/dnsmessage"
 )
 
-// NewResolver returns a [dns.Resolver] that uses libresolv's res_query,
-// supporting arbitrary DNS record types.
-func NewResolver() dns.Resolver {
-	return dns.FuncResolver(func(ctx context.Context, q dnsmessage.Question) (*dnsmessage.Message, error) {
+// NewRawResolver returns a [dns.RawResolver] that uses libresolv's res_query,
+// returning raw DNS wire-format bytes for any record type.
+// Callers can parse the response with any DNS library.
+func NewRawResolver() dns.RawResolver {
+	return dns.FuncRawResolver(func(ctx context.Context, name string, qtype uint16) ([]byte, error) {
 		type result struct {
-			msg *dnsmessage.Message
-			err error
+			data []byte
+			err  error
 		}
 		ch := make(chan result, 1)
 
 		go func() {
-			qname := q.Name.String()
-			cQname := C.CString(qname)
+			cQname := C.CString(name)
 			defer C.free(unsafe.Pointer(cQname))
 
 			// 4096 bytes covers the vast majority of real-world DNS responses,
 			// including DNSSEC and large TXT records.
 			answer := make([]byte, 4096)
 			// res_query is blocking and returns -1 on error.
+			// Class 1 = ClassINET (RFC 1035).
 			n := C.res_query(
 				cQname,
-				C.int(q.Class),
-				C.int(q.Type),
+				C.int(1),
+				C.int(qtype),
 				(*C.uchar)(unsafe.Pointer(&answer[0])),
 				C.int(len(answer)),
 			)
@@ -70,19 +70,14 @@ func NewResolver() dns.Resolver {
 				ch <- result{nil, fmt.Errorf("res_query failed: %v", n)}
 				return
 			}
-			var msg dnsmessage.Message
-			if err := msg.Unpack(answer[:n]); err != nil {
-				ch <- result{nil, err}
-				return
-			}
-			ch <- result{&msg, nil}
+			ch <- result{answer[:n], nil}
 		}()
 
 		select {
 		case <-ctx.Done():
 			return nil, ctx.Err()
 		case res := <-ch:
-			return res.msg, res.err
+			return res.data, res.err
 		}
 	})
 }
