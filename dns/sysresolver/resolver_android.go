@@ -21,6 +21,7 @@
 package sysresolver
 
 /*
+#cgo LDFLAGS: -landroid
 #include <stdlib.h>
 #include <android/multinetwork.h>
 */

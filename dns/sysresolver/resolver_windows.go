@@ -33,6 +33,8 @@ package sysresolver
 import (
 	"context"
 	"fmt"
+	"sync"
+	"sync/atomic"
 	"syscall"
 	"time"
 	"unsafe"
@@ -113,17 +115,26 @@ var _txtFirstOffset = unsafe.Offsetof(_txtDataLayout{}.first)
 // completion callback returns. All fields are written once before DnsQueryEx
 // is called (or in the callback), then read by the other side.
 type queryState struct {
-	event  windows.Handle   // manual-reset event, signalled by callback
-	result dnsQueryResult   // filled by DnsQueryEx / callback
-	cancel dnsQueryCancel   // opaque cancel token returned by DnsQueryEx
+	event  windows.Handle // manual-reset event, signalled by callback
+	result dnsQueryResult // filled by DnsQueryEx / callback
+	cancel dnsQueryCancel // opaque cancel token returned by DnsQueryEx
 }
+
+// _stateCounter and _stateMap let us pass a plain integer ID as the
+// DnsQueryEx callback context instead of an unsafe pointer, avoiding
+// the checkptr violation that -race would otherwise report.
+var (
+	_stateCounter atomic.Uint64
+	_stateMap     sync.Map // map[uint64]*queryState
+)
 
 // dnsQueryCallback is the callback invoked by Windows when the query completes.
 // It must be a stdcall function: (pQueryContext uintptr, pQueryResults uintptr) uintptr.
 // The callback signals the event so the waiting goroutine can proceed.
 var dnsQueryCallback = syscall.NewCallback(func(pQueryContext, _ uintptr) uintptr {
-	state := (*queryState)(unsafe.Pointer(pQueryContext))
-	windows.SetEvent(state.event)
+	if v, ok := _stateMap.Load(uint64(pQueryContext)); ok {
+		windows.SetEvent(v.(*queryState).event)
+	}
 	return 0
 })
 
@@ -146,13 +157,19 @@ func NewRawResolver() dns.RawResolver {
 
 		state.result.version = dnsQueryResultsVersion1
 
+		// Use an opaque integer ID as the callback context to avoid passing a
+		// Go pointer as a uintptr, which would fail the -race checkptr check.
+		id := _stateCounter.Add(1)
+		_stateMap.Store(id, state)
+		defer _stateMap.Delete(id)
+
 		req := dnsQueryRequest{
 			version:      dnsQueryRequestVersion1,
 			queryName:    nameUTF16,
 			queryType:    qtype,
 			queryOptions: dnsQueryStandard,
 			callback:     dnsQueryCallback,
-			queryContext: uintptr(unsafe.Pointer(state)),
+			queryContext: uintptr(id),
 		}
 
 		// DnsQueryEx returns DNS_REQUEST_PENDING when running asynchronously,
