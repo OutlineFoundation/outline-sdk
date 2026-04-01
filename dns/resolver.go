@@ -525,18 +525,42 @@ func NewHTTPSRawResolver(sd transport.StreamDialer, resolverAddr string, url str
 		if httpResp.StatusCode != http.StatusOK {
 			return nil, &nestedError{ErrReceive, fmt.Errorf("got HTTP status %v", httpResp.StatusCode)}
 		}
-		response, err := io.ReadAll(httpResp.Body)
+		buf, err = readAllInto(httpResp.Body, buf, httpResp.ContentLength)
 		if err != nil {
 			return nil, &nestedError{ErrReceive, fmt.Errorf("failed to read response: %w", err)}
 		}
 
 		// Process response.
 		// Ignore invalid packets that fail to parse. It could be injected.
-		if err := checkResponseRaw(0, name, qtype, response); err != nil {
+		if err := checkResponseRaw(0, name, qtype, buf); err != nil {
 			return nil, &nestedError{ErrBadResponse, err}
 		}
-		return response, nil
+		return buf, nil
 	})
+}
+
+// readAllInto reads everything from r into buf, reusing its capacity.
+// It pre-grows the buffer if expectedSize is known and reasonable for DNS.
+func readAllInto(r io.Reader, buf []byte, expectedSize int64) ([]byte, error) {
+	buf = buf[:0]
+	// Pre-grow buffer if we know the size and it's reasonable for DNS (< 64KB).
+	if expectedSize > 0 && expectedSize <= 65535 && int64(cap(buf)) < expectedSize {
+		buf = make([]byte, 0, expectedSize)
+	}
+	for {
+		if len(buf) == cap(buf) {
+			buf = append(buf, 0)[:len(buf)]
+		}
+		n, err := r.Read(buf[len(buf):cap(buf)])
+		buf = buf[:len(buf)+n]
+		if err != nil {
+			if err == io.EOF {
+				break
+			}
+			return buf, err
+		}
+	}
+	return buf, nil
 }
 
 // NewHTTPSResolver creates a [Resolver] that implements the [DNS-over-HTTPS] protocol, using a [transport.StreamDialer]
