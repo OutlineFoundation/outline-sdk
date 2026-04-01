@@ -129,32 +129,50 @@ func NewQuestion(domain string, qtype dnsmessage.Type) (*dnsmessage.Question, er
 const maxUDPMessageSize = 1232
 
 // appendName splits a dot-separated domain name into DNS wire-format labels and appends them to buf.
+// It supports escaping characters using a backslash.
 func appendName(buf []byte, name string) ([]byte, error) {
 	if len(name) > 0 && name[len(name)-1] == '.' {
-		name = name[:len(name)-1]
+		// Only strip the last dot if it's not escaped
+		if len(name) < 2 || name[len(name)-2] != '\\' {
+			name = name[:len(name)-1]
+		}
 	}
 	if len(name) == 0 {
 		return append(buf, 0), nil
 	}
 	startLength := len(buf)
+	
 	for len(name) > 0 {
-		idx := strings.IndexByte(name, '.')
-		var label string
-		if idx == -1 {
-			label = name
-			name = ""
-		} else {
-			label = name[:idx]
-			name = name[idx+1:]
+		buf = append(buf, 0) // Placeholder for label length
+		lblStart := len(buf)
+		
+		idx := -1
+		for i := 0; i < len(name); i++ {
+			if name[i] == '.' {
+				idx = i
+				break
+			} else if name[i] == '\\' && i+1 < len(name) {
+				i++
+				buf = append(buf, name[i])
+			} else {
+				buf = append(buf, name[i])
+			}
 		}
-		if len(label) == 0 {
+		
+		lblLen := len(buf) - lblStart
+		if lblLen == 0 {
 			return nil, errors.New("empty label")
 		}
-		if len(label) > 63 {
+		if lblLen > 63 {
 			return nil, errors.New("label too long")
 		}
-		buf = append(buf, byte(len(label)))
-		buf = append(buf, label...)
+		buf[lblStart-1] = byte(lblLen) // Write the correct length
+
+		if idx == -1 {
+			name = ""
+		} else {
+			name = name[idx+1:]
+		}
 	}
 	buf = append(buf, 0)
 	if len(buf)-startLength > 255 {

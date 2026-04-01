@@ -72,6 +72,31 @@ func TestNewQuestionLongName(t *testing.T) {
 	require.Error(t, err)
 }
 
+func Test_appendName(t *testing.T) {
+	serialize := func(domain string) []byte {
+		buf, err := appendName(nil, domain)
+		require.NoError(t, err)
+		return buf
+	}
+	serializeErr := func(domain string) {
+		_, err := appendName(nil, domain)
+		require.Error(t, err)
+	}
+
+	require.Equal(t, []byte("\x00"), serialize(""), "Empty")
+	require.Equal(t, []byte("\x00"), serialize("."), "Root")
+	require.Equal(t, []byte("\x07example\x03com\x00"), serialize("example.com."), "FQDN")
+	require.Equal(t, []byte("\x07example\x03com\x00"), serialize("example.com"), "NoTrailingDot")
+	require.Equal(t, []byte("\x07foo.bar\x03com\x00"), serialize("foo\\.bar.com."), "DotInLabel")
+	require.Equal(t, []byte("\x07foo\\bar\x03com\x00"), serialize("foo\\\\bar.com."), "BackslashInLabel")
+	
+	require.Equal(t, append(append([]byte{63}, strings.Repeat("a", 63)...), []byte("\x03com\x00")...), serialize(strings.Repeat("a", 63)+".com."), "MaxLengthLabel")
+
+	serializeErr(strings.Repeat("a", 64) + ".com") // LongLabel
+	serializeErr("example..com")                   // EmptyLabel
+	serializeErr(strings.Repeat("a.", 128))        // NameTooLong
+}
+
 func Test_appendRequestRaw(t *testing.T) {
 	id := uint16(1234)
 	offset := 2
