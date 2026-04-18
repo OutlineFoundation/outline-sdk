@@ -57,7 +57,7 @@ jobs:
         run: go tool go-licenses check --ignore=golang.org/x --allowed_licenses=Apache-2.0,Apache-3,BSD-3-Clause,BSD-4-Clause,CC0-1.0,MIT ./...
 
       - name: Staticcheck x
-        run: go -C x tool staticcheck -tags psiphon ./...
+        run: go -C x tool staticcheck -tags psiphon,PSIPHON_DISABLE_INPROXY ./...
 
       - name: Test SDK
         # Enable nettests, which executes external network requests.
@@ -65,7 +65,7 @@ jobs:
 
       - name: Test x
         # Enable nettests, which executes external network requests.
-        run: go test -C x -tags nettest,psiphon -race -bench '.' ./... -benchtime=100ms
+        run: go test -C x -tags nettest,psiphon,PSIPHON_DISABLE_INPROXY -race -bench '.' ./... -benchtime=100ms
 
   android-test:
     runs-on: ubuntu-latest
