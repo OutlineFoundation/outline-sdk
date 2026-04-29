@@ -48,7 +48,7 @@ sequenceDiagram
 ### Step-by-Step Walkthrough
 
 #### 1. Read from Local TUN
-The VPN application runs a continuous loop reading outbound IP packets from the host OS TUN device. (On platforms like Apple, the OS may call a callback instead of the app actively reading).
+The VPN application runs a continuous loop reading outbound IP packets from the host OS TUN device. (On Apple, the client calls [NEPacketTunnelFlow.readPackets](https://developer.apple.com/documentation/networkextension/nepackettunnelflow/readpackets(completionhandler:)) and gets a callback from the OS instead of reading directly from the TUN device).
 
 #### 2. Write to `lwIPDevice`
 The app writes the IP packet to the `lwIPDevice` (`lwIPDevice.Write`).
