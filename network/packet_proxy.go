@@ -42,9 +42,8 @@ type PacketProxy interface {
 // Multiple goroutines can simultaneously invoke methods on a PacketRequestSender.
 type PacketRequestSender interface {
 	// WriteTo sends a UDP request packet to the PacketProxy. The packet is destined for the remote server identified
-	// by `destination` and the payload of the packet is stored in `p`. If `p` is empty, the request packet will be
-	// ignored. WriteTo returns the number of bytes written from `p` and any error encountered that caused the function
-	// to stop early.
+	// by `destination` and the payload of the packet is stored in `p`. WriteTo returns the number of bytes written
+	// from `p` and any error encountered that caused the function to stop early.
 	//
 	// `p` must not be modified, and it must not be referenced after WriteTo returns.
 	WriteTo(p []byte, destination netip.AddrPort) (int, error)
