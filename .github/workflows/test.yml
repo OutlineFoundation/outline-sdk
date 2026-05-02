@@ -18,6 +18,7 @@ jobs:
     runs-on: ${{ matrix.os }}
     env:
       OUTPUT_DIR: ${{ github.workspace }}/out
+      GOEXPERIMENT: synctest
 
     steps:
       - name: Check out code into the Go module directory
@@ -140,6 +141,6 @@ jobs:
           script: |
             # We can't set environment variables in this script, nor refer to $ANDROID_NDK_HOME in the job.step.env block, so
             # we set it explicitly here. (#pain)
-            CC="$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin/x86_64-linux-android${{ matrix.api-level }}-clang" GOOS=android GOARCH=amd64 CGO_ENABLED=1 go test -tags nettest -exec "${{ github.workspace }}/run_on_android.sh" -v ./...
+            CC="$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin/x86_64-linux-android${{ matrix.api-level }}-clang" GOOS=android GOARCH=amd64 CGO_ENABLED=1 GOEXPERIMENT=synctest go test -tags nettest -exec "${{ github.workspace }}/run_on_android.sh" -v ./...
             # TODO(fortuna): Fix psiphon and support testdata.
-            CC="$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin/x86_64-linux-android${{ matrix.api-level }}-clang" GOOS=android GOARCH=amd64 CGO_ENABLED=1 go test -C x -tags nettest,psiphon -exec "${{ github.workspace }}/run_on_android.sh" -v ./...
+            CC="$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin/x86_64-linux-android${{ matrix.api-level }}-clang" GOOS=android GOARCH=amd64 CGO_ENABLED=1 GOEXPERIMENT=synctest go test -C x -tags nettest,psiphon -exec "${{ github.workspace }}/run_on_android.sh" -v ./...
