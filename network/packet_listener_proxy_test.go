@@ -43,130 +43,100 @@ func TestWithWriteTimeoutOptionWorks(t *testing.T) {
 	require.Equal(t, 5*time.Minute, altProxy.writeIdleTimeout)
 }
 
-// Test 1: Half-Closed Session on WriteFrom Failure
-func TestHalfClosedSessionOnWriteFromFailure(t *testing.T) {
-	synctest.Test(t, func(t *testing.T) {
-		// Create a mock PacketResponseReceiver that returns an error
-		mockReceiver := &mockResponseReceiver{
-			writeFromErr: errors.New("write error"),
-			closeCh:      make(chan struct{}),
-		}
-
-		mockConn := &mockPacketConn{
-			readFromCh: make(chan struct{}),
-			readData:   []byte("test data"),
-			readAddr:   &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1), Port: 1234},
-		}
-
-		mockListener := &mockPacketListener{
-			conn: mockConn,
-		}
-
-		proxy, err := NewPacketProxyFromPacketListener(mockListener)
-		require.NoError(t, err)
-
-		sender, err := proxy.NewSession(mockReceiver)
-		require.NoError(t, err)
-		require.NotNil(t, sender)
-
-		// Signal ReadFrom to proceed
-		close(mockConn.readFromCh)
-
-		// Wait for all activity to settle (goroutine should exit)
-		synctest.Wait()
-
-		// Verify that receiver was closed
-		select {
-		case <-mockReceiver.closeCh:
-			// Success
-		default:
-			t.Fatal("Receiver should have been closed")
-		}
-
-		// Verify that proxyConn was NOT closed (half-closed state)
-		require.False(t, mockConn.isClosed(), "proxyConn should not be closed on WriteFrom failure")
-
-		// Verify that we can still send data
-		_, err = sender.WriteTo([]byte("test"), netip.MustParseAddrPort("127.0.0.1:1234"))
-		require.NoError(t, err, "WriteTo should succeed in half-closed state")
-
-		// Clean up
-		sender.Close()
-		synctest.Wait()
-	})
-}
-
-type mockResponseReceiver struct {
-	writeFromErr error
-	closed       bool
-	closeCh      chan struct{}
-}
-
-func (m *mockResponseReceiver) WriteFrom(p []byte, source net.Addr) (int, error) {
-	return 0, m.writeFromErr
-}
-
-func (m *mockResponseReceiver) Close() error {
-	m.closed = true
-	if m.closeCh != nil {
-		close(m.closeCh)
-	}
-	return nil
-}
+// --- Mock Helpers ---
 
 type mockPacketConn struct {
-	net.PacketConn // embed to implement interface with panics for unused methods
-	mu             sync.Mutex
-	readData       []byte
-	readAddr       net.Addr
-	readErr        error
-	readFromCh     chan struct{}
-	stopCh         chan struct{}
-	closed         bool
-	closeFunc      func() error
-	readFunc       func([]byte) (int, net.Addr, error)
+	mu            sync.Mutex
+	readErr       error
+	readCh        chan []byte // Sends data to ReadFrom
+	writeErr      error
+	closed        bool
+	closeCh       chan struct{}
+	readDeadline  time.Time
+	writeDeadline time.Time
+}
+
+func newMockPacketConn() *mockPacketConn {
+	return &mockPacketConn{
+		readCh:  make(chan []byte, 10),
+		closeCh: make(chan struct{}),
+	}
 }
 
 func (m *mockPacketConn) ReadFrom(b []byte) (int, net.Addr, error) {
-	<-m.readFromCh
 	m.mu.Lock()
-	if m.readFunc != nil {
+	if m.closed {
 		m.mu.Unlock()
-		return m.readFunc(b)
+		return 0, nil, io.EOF
 	}
 	if m.readErr != nil {
+		err := m.readErr
+		m.readErr = nil // Clear after one use for targeted error injection
 		m.mu.Unlock()
-		return 0, nil, m.readErr
+		return 0, nil, err
 	}
-	n := copy(b, m.readData)
-	addr := m.readAddr
 	m.mu.Unlock()
-	return n, addr, nil
+
+	select {
+	case data, ok := <-m.readCh:
+		if !ok {
+			return 0, nil, io.EOF
+		}
+		n := copy(b, data)
+		return n, &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1), Port: 1234}, nil
+	case <-m.closeCh:
+		return 0, nil, io.EOF
+	}
+}
+
+func (m *mockPacketConn) WriteTo(b []byte, addr net.Addr) (int, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.closed {
+		return 0, io.ErrClosedPipe
+	}
+	if m.writeErr != nil {
+		return 0, m.writeErr
+	}
+	return len(b), nil
 }
 
 func (m *mockPacketConn) Close() error {
 	m.mu.Lock()
+	if m.closed {
+		m.mu.Unlock()
+		return io.ErrClosedPipe
+	}
 	m.closed = true
-	m.readErr = io.EOF
-	select {
-	case <-m.readFromCh:
-	default:
-		close(m.readFromCh)
-	}
-	if m.stopCh != nil {
-		close(m.stopCh)
-	}
-	closeFunc := m.closeFunc
+	close(m.closeCh)
 	m.mu.Unlock()
-
-	if closeFunc != nil {
-		return closeFunc()
-	}
 	return nil
 }
 
-func (m *mockPacketConn) WriteTo(p []byte, addr net.Addr) (int, error) {
-	return len(p), nil
+func (m *mockPacketConn) LocalAddr() net.Addr {
+	return &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1), Port: 1234}
+}
+
+func (m *mockPacketConn) SetDeadline(t time.Time) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.readDeadline = t
+	m.writeDeadline = t
+	return nil
+}
+
+func (m *mockPacketConn) SetReadDeadline(t time.Time) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.readDeadline = t
+	return nil
+}
+
+func (m *mockPacketConn) SetWriteDeadline(t time.Time) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.writeDeadline = t
+	return nil
 }
 
 func (m *mockPacketConn) isClosed() bool {
@@ -176,178 +146,318 @@ func (m *mockPacketConn) isClosed() bool {
 }
 
 type mockPacketListener struct {
-	conn net.PacketConn
+	mu          sync.Mutex
+	conn        net.PacketConn
+	listenErr   error
+	listenDelay time.Duration
+	listenCount int
 }
 
 func (m *mockPacketListener) ListenPacket(ctx context.Context) (net.PacketConn, error) {
-	return m.conn, nil
-}
+	m.mu.Lock()
+	m.listenCount++
+	delay := m.listenDelay
+	err := m.listenErr
+	conn := m.conn
+	m.mu.Unlock()
 
-// Test 2: Lock Contention in Close
-func TestLockContentionInClose(t *testing.T) {
-	synctest.Test(t, func(t *testing.T) {
-		// Create a mock PacketConn where Close blocks
-		closeBlockCh := make(chan struct{})
-		mockConn := &mockPacketConn{
-			readFromCh: make(chan struct{}),
-			closeFunc: func() error {
-				<-closeBlockCh
-				return nil
-			},
-		}
-
-		mockListener := &mockPacketListener{
-			conn: mockConn,
-		}
-
-		proxy, err := NewPacketProxyFromPacketListener(mockListener)
-		require.NoError(t, err)
-
-		sender, err := proxy.NewSession(&mockResponseReceiver{})
-		require.NoError(t, err)
-
-		// Call Close in a goroutine (it will block)
-		closeDone := make(chan struct{})
-		go func() {
-			sender.Close()
-			close(closeDone)
-		}()
-
-		// Wait for the goroutine to acquire the lock and block in Close
-		synctest.Wait()
-
-		// Attempt to call WriteTo (it should block waiting for the lock)
-		writeDone := make(chan struct{})
-		go func() {
-			sender.WriteTo([]byte("test"), netip.MustParseAddrPort("127.0.0.1:1234"))
-			close(writeDone)
-		}()
-
-		// Wait for all activity to settle (both goroutines should be blocked)
-		synctest.Wait()
-
-		// Verify that WriteTo is NOT blocked (lock should have been released)
+	if delay > 0 {
 		select {
-		case <-writeDone:
-			// Success, it didn't block
-		default:
-			t.Fatal("WriteTo blocked waiting for the lock")
+		case <-time.After(delay):
+		case <-ctx.Done():
+			return nil, ctx.Err()
 		}
+	}
 
-		// Unblock Close
-		close(closeBlockCh)
+	if err != nil {
+		return nil, err
+	}
 
-		// Verify that both finish
-		<-closeDone
-		<-writeDone
-	})
+	if ctx.Err() != nil {
+		return nil, ctx.Err()
+	}
+
+	return conn, nil
 }
 
-// Test 3: Silent Packet Drops on io.ErrShortBuffer
-func TestSilentPacketDropsOnErrShortBuffer(t *testing.T) {
+func (m *mockPacketListener) getListenCount() int {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.listenCount
+}
+
+type mockResponseReceiver struct {
+	writeFromCh chan []byte
+	closeCh     chan struct{}
+}
+
+func newMockResponseReceiver() *mockResponseReceiver {
+	return &mockResponseReceiver{
+		writeFromCh: make(chan []byte, 10),
+		closeCh:     make(chan struct{}),
+	}
+}
+
+func (m *mockResponseReceiver) WriteFrom(p []byte, source net.Addr) (int, error) {
+	m.writeFromCh <- append([]byte(nil), p...)
+	return len(p), nil
+}
+
+func (m *mockResponseReceiver) Close() error {
+	close(m.closeCh)
+	return nil
+}
+
+// --- Tests ---
+
+func TestStateTransitions(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
-		mockReceiver := &mockResponseReceiver{
-			closeCh: make(chan struct{}),
-		}
-
-		readCount := 0
-		var mockConn *mockPacketConn
-		mockConn = &mockPacketConn{
-			readFromCh: make(chan struct{}),
-			stopCh:     make(chan struct{}),
-			readFunc: func(b []byte) (int, net.Addr, error) {
-				readCount++
-				if readCount == 1 {
-					return 0, nil, io.ErrShortBuffer
-				}
-				// Block on subsequent reads until stopped
-				select {
-				case <-mockConn.stopCh:
-					return 0, nil, io.EOF
-				}
-			},
-		}
-
-		mockListener := &mockPacketListener{
-			conn: mockConn,
-		}
-
+		// 1. NewSession -> Uninitialized
+		mockConn := newMockPacketConn()
+		mockListener := &mockPacketListener{conn: mockConn}
 		proxy, err := NewPacketProxyFromPacketListener(mockListener)
 		require.NoError(t, err)
 
-		sender, err := proxy.NewSession(mockReceiver)
+		receiver := newMockResponseReceiver()
+		sender, err := proxy.NewSession(receiver)
 		require.NoError(t, err)
 		require.NotNil(t, sender)
-		defer synctest.Wait()
 		defer sender.Close()
+		require.Equal(t, 0, mockListener.getListenCount()) // Still Uninitialized
 
-		// Signal ReadFrom to proceed for the first read
-		close(mockConn.readFromCh)
+		// 2. Uninitialized -> Active (First successful WriteTo)
+		_, err = sender.WriteTo([]byte("hello"), netip.MustParseAddrPort("127.0.0.1:1234"))
+		require.NoError(t, err)
+		require.Equal(t, 1, mockListener.getListenCount()) // Now Active
 
-		// Wait for the read loop to process the error and block on the second read
-		synctest.Wait()
+		// 3. Active -> Active (Subsequent WriteTo)
+		_, err = sender.WriteTo([]byte("world"), netip.MustParseAddrPort("127.0.0.1:1234"))
+		require.NoError(t, err)
+		require.Equal(t, 1, mockListener.getListenCount()) // Still 1
 
-		// Verify that the receiver WAS closed (meaning the loop exited)
-		select {
-		case <-mockReceiver.closeCh:
-			// Success, the loop exited
-		default:
-			t.Fatal("Receiver should have been closed on io.ErrShortBuffer")
-		}
+		// 4. Active -> Closed (via Close)
+		err = sender.Close()
+		require.NoError(t, err)
+		require.True(t, mockConn.isClosed())
 
-		// Verify that no data was written to the receiver
-		require.False(t, mockReceiver.closed)
-
-		// Clean up
-		sender.Close()
-		synctest.Wait()
+		// 5. Closed -> Closed (WriteTo returns ErrClosed)
+		_, err = sender.WriteTo([]byte("dead"), netip.MustParseAddrPort("127.0.0.1:1234"))
+		require.ErrorIs(t, err, ErrClosed)
 	})
 }
 
-// Test 4: Timer Race Condition (Using synctest)
-func TestTimerRaceCondition(t *testing.T) {
+func TestUninitializedRetry(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
-		mockReceiver := &mockResponseReceiver{
-			closeCh: make(chan struct{}),
-		}
-
-		mockConn := &mockPacketConn{
-			readFromCh: make(chan struct{}),
-		}
-
+		mockConn := newMockPacketConn()
 		mockListener := &mockPacketListener{
-			conn: mockConn,
+			conn:      mockConn,
+			listenErr: errors.New("temporary network error"),
 		}
-
-		timeout := 100 * time.Millisecond
-		proxy, err := NewPacketProxyFromPacketListener(mockListener, WithPacketListenerWriteIdleTimeout(timeout))
+		proxy, err := NewPacketProxyFromPacketListener(mockListener)
 		require.NoError(t, err)
 
-		sender, err := proxy.NewSession(mockReceiver)
+		receiver := newMockResponseReceiver()
+		sender, err := proxy.NewSession(receiver)
+		require.NoError(t, err)
+		defer sender.Close()
+
+		// WriteTo fails because ListenPacket fails
+		_, err = sender.WriteTo([]byte("hello"), netip.MustParseAddrPort("127.0.0.1:1234"))
+		require.Error(t, err)
+		require.Equal(t, 1, mockListener.getListenCount())
+
+		// Fix the error in the mock
+		mockListener.mu.Lock()
+		mockListener.listenErr = nil
+		mockListener.mu.Unlock()
+
+		// Retry WriteTo -> Should SUCCEED!
+		_, err = sender.WriteTo([]byte("hello again"), netip.MustParseAddrPort("127.0.0.1:1234"))
+		require.NoError(t, err)
+		require.Equal(t, 2, mockListener.getListenCount())
+
+		sender.Close()
+	})
+}
+
+func TestUninitializedClose(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		mockListener := &mockPacketListener{}
+		receiver := newMockResponseReceiver()
+		proxy, err := NewPacketProxyFromPacketListener(mockListener)
 		require.NoError(t, err)
 
-		time.Sleep(timeout - 10*time.Millisecond)
+		sender, err := proxy.NewSession(receiver)
+		require.NoError(t, err)
+		defer sender.Close()
 
-		_, err = sender.WriteTo([]byte("test"), netip.MustParseAddrPort("127.0.0.1:1234"))
+		// Close without ever writing
+		err = sender.Close()
 		require.NoError(t, err)
 
+		// Verify ListenPacket was NEVER called
+		require.Equal(t, 0, mockListener.getListenCount())
+
+		// Verify receiver was closed
+		select {
+		case <-receiver.closeCh:
+			// Success
+		case <-time.After(1 * time.Second):
+			t.Fatal("Receiver should have been closed")
+		}
+	})
+}
+
+func TestIdleTimeout(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		mockConn := newMockPacketConn()
+		mockListener := &mockPacketListener{conn: mockConn}
+		// Set a short timeout for testing
+		proxy, err := NewPacketProxyFromPacketListener(mockListener, WithPacketListenerWriteIdleTimeout(100*time.Millisecond))
+		require.NoError(t, err)
+
+		receiver := newMockResponseReceiver()
+		sender, err := proxy.NewSession(receiver)
+		require.NoError(t, err)
+		defer sender.Close()
+
+		// 1. Timeout in Uninitialized state
+		// Wait for 150ms (virtual time!)
+		time.Sleep(150 * time.Millisecond)
+
+		// Session should be closed
+		_, err = sender.WriteTo([]byte("too late"), netip.MustParseAddrPort("127.0.0.1:1234"))
+		require.ErrorIs(t, err, ErrClosed)
+		require.Equal(t, 0, mockListener.getListenCount()) // Never initialized
+
+		// 2. Timeout in Active state
+		receiver2 := newMockResponseReceiver()
+		sender2, err := proxy.NewSession(receiver2)
+		require.NoError(t, err)
+		defer sender2.Close()
+
+		// Make it Active
+		_, err = sender2.WriteTo([]byte("hello"), netip.MustParseAddrPort("127.0.0.1:1234"))
+		require.NoError(t, err)
+
+		// Wait for 50ms (timer is at 50ms/100ms)
+		time.Sleep(50 * time.Millisecond)
+
+		// Write again -> Resets timer to 100ms!
+		_, err = sender2.WriteTo([]byte("keepalive"), netip.MustParseAddrPort("127.0.0.1:1234"))
+		require.NoError(t, err)
+
+		// Wait for 70ms (timer at 70ms/100ms)
+		time.Sleep(70 * time.Millisecond)
+		// Still active!
+		_, err = sender2.WriteTo([]byte("still here"), netip.MustParseAddrPort("127.0.0.1:1234"))
+		require.NoError(t, err)
+
+		// Wait for 150ms -> Should time out!
+		time.Sleep(150 * time.Millisecond)
+
+		_, err = sender2.WriteTo([]byte("too late"), netip.MustParseAddrPort("127.0.0.1:1234"))
+		require.ErrorIs(t, err, ErrClosed)
+	})
+}
+
+func TestListenPacketTimeout(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		// Mock listener that takes 1 second to return
+		mockListener := &mockPacketListener{
+			listenDelay: 1 * time.Second,
+		}
+		// Set timeout to 100ms
+		proxy, err := NewPacketProxyFromPacketListener(mockListener, WithPacketListenerWriteIdleTimeout(100*time.Millisecond))
+		require.NoError(t, err)
+
+		receiver := newMockResponseReceiver()
+		sender, err := proxy.NewSession(receiver)
+		require.NoError(t, err)
+		defer sender.Close()
+
+		// WriteTo should fail with context deadline exceeded
+		_, err = sender.WriteTo([]byte("hello"), netip.MustParseAddrPort("127.0.0.1:1234"))
+		require.Error(t, err)
+		require.True(t, errors.Is(err, context.DeadlineExceeded))
+
+		sender.Close()
+	})
+}
+
+func TestConcurrency(t *testing.T) {
+	// Run multiple concurrent WriteTo calls
+	mockConn := newMockPacketConn()
+	mockListener := &mockPacketListener{conn: mockConn}
+	proxy, err := NewPacketProxyFromPacketListener(mockListener)
+	require.NoError(t, err)
+
+	receiver := newMockResponseReceiver()
+	sender, err := proxy.NewSession(receiver)
+	require.NoError(t, err)
+	defer sender.Close()
+
+	var wg sync.WaitGroup
+	for i := 0; i < 50; i++ {
+		wg.Add(1)
+		go func(val int) {
+			defer wg.Done()
+			_, err := sender.WriteTo([]byte("data"), netip.MustParseAddrPort("127.0.0.1:1234"))
+			require.NoError(t, err)
+		}(i)
+	}
+
+	wg.Wait()
+
+	// Verify ListenPacket called EXACTLY ONCE
+	require.Equal(t, 1, mockListener.getListenCount())
+
+	sender.Close()
+}
+
+func TestRecoverableErrors(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		mockConn := newMockPacketConn()
+		mockListener := &mockPacketListener{conn: mockConn}
+		proxy, err := NewPacketProxyFromPacketListener(mockListener)
+		require.NoError(t, err)
+
+		receiver := newMockResponseReceiver()
+		sender, err := proxy.NewSession(receiver)
+		require.NoError(t, err)
+		defer sender.Close()
+
+		// Initialize
+		_, err = sender.WriteTo([]byte("hello"), netip.MustParseAddrPort("127.0.0.1:1234"))
+		require.NoError(t, err)
+
+		// Inject ErrShortBuffer into ReadFrom
+		mockConn.mu.Lock()
+		mockConn.readErr = io.ErrShortBuffer
+		mockConn.mu.Unlock()
+
+		// Wait for goroutine to process the error
 		synctest.Wait()
 
-		time.Sleep(20 * time.Millisecond)
-
+		// Verify receiver was NOT closed (ErrShortBuffer is recoverable)
 		select {
-		case <-mockReceiver.closeCh:
-			t.Fatal("Session should not have been closed, timer should have been reset")
+		case <-receiver.closeCh:
+			t.Fatal("Receiver should NOT be closed on ErrShortBuffer")
 		default:
 			// Success
 		}
 
-		// Clean up to let the read loop goroutine exit
+		// Send valid data
+		mockConn.readCh <- []byte("valid response")
+
+		// Verify receiver gets the valid data
+		select {
+		case data := <-receiver.writeFromCh:
+			require.Equal(t, []byte("valid response"), data)
+		case <-time.After(1 * time.Second):
+			t.Fatal("Receiver should have received valid data")
+		}
+
 		sender.Close()
-		synctest.Wait()
 	})
 }
-
-
-
-

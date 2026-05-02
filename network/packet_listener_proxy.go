@@ -42,13 +42,38 @@ type PacketListenerProxy struct {
 	writeIdleTimeout time.Duration
 }
 
+// packetListenerRequestSender implements [PacketRequestSender] to handle a UDP session.
+//
+// # State Machine
+//
+// The session operates in one of three states, determined by `closed` and `proxyConn`:
+//
+//  1. Uninitialized (!closed, proxyConn == nil)
+//     Initial state after NewSession. No OS resources (sockets, goroutines) are allocated yet.
+//     The writeIdleTimer is running.
+//     Transitions to:
+//     - Active: on first successful WriteTo.
+//     - Closed: on Close() or idle timeout.
+//     - Stays Uninitialized: if WriteTo fails to create the connection (retries allowed).
+//
+//  2. Active (!closed, proxyConn != nil)
+//     The connection is established and the background response-relay goroutine is running.
+//     Transitions to:
+//     - Closed: on Close() or idle timeout.
+//
+//  3. Closed (closed == true, proxyConn == nil)
+//     Terminal state. All OS resources are cleaned up (or stopping).
+//     All future WriteTo or Close calls immediately return ErrClosed.
 type packetListenerRequestSender struct {
-	mu     sync.Mutex // Protects closed and timer function calls
-	closed bool
+	mu               sync.Mutex // Protects closed and timer function calls
+	closed           bool
 
-	proxyConn        net.PacketConn
+	listener         transport.PacketListener
 	writeIdleTimeout time.Duration
-	writeIdleTimer   *time.Timer
+	respReceiver     PacketResponseReceiver
+
+	proxyConn      net.PacketConn
+	writeIdleTimer *time.Timer
 }
 
 // NewPacketProxyFromPacketListener creates a new [PacketProxy] that uses the existing [transport.PacketListener] to
@@ -88,27 +113,45 @@ func WithPacketListenerWriteIdleTimeout(timeout time.Duration) func(*PacketListe
 
 // NewSession implements [PacketProxy].NewSession function. It uses [transport.PacketListener].ListenPacket to create
 // a [net.PacketConn], and constructs a new [PacketRequestSender] that is based on this [net.PacketConn].
-func (proxy *PacketListenerProxy) NewSession(respWriter PacketResponseReceiver) (PacketRequestSender, error) {
-	if respWriter == nil {
+func (proxy *PacketListenerProxy) NewSession(respReceiver PacketResponseReceiver) (PacketRequestSender, error) {
+	if respReceiver == nil {
 		return nil, errors.New("respWriter must not be nil")
 	}
-	proxyConn, err := proxy.listener.ListenPacket(context.Background())
-	if err != nil {
-		return nil, err
-	}
+
 	reqSender := &packetListenerRequestSender{
-		proxyConn:        proxyConn,
+		listener:         proxy.listener,
 		writeIdleTimeout: proxy.writeIdleTimeout,
+		respReceiver:     respReceiver,
 	}
 
-	// Terminate the session after timeout with no outgoing writes (deadline is refreshed by WriteTo)
+	// Terminate the session after timeout with no outgoing writes (deadline is refreshed by WriteTo).
+	// We lock here because the timer goroutine could call Close() and access writeIdleTimer concurrently.
+	reqSender.mu.Lock()
 	reqSender.writeIdleTimer = time.AfterFunc(reqSender.writeIdleTimeout, func() {
 		reqSender.Close()
 	})
+	reqSender.mu.Unlock()
+
+	return reqSender, nil
+}
+
+func (s *packetListenerRequestSender) getProxyConnLocked() error {
+	if s.proxyConn != nil {
+		return nil
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), s.writeIdleTimeout)
+	defer cancel()
+
+	proxyConn, err := s.listener.ListenPacket(ctx)
+	if err != nil {
+		return err
+	}
+	s.proxyConn = proxyConn
 
 	// Relay incoming UDP responses from the proxy asynchronously until EOF, session expiration or error
 	go func() {
-		defer respWriter.Close()
+		defer s.respReceiver.Close()
 
 		// Allocate buffer from slicepool, because `go build -gcflags="-m"` shows a local array will escape to heap
 		slice := packetBufferPool.LazySlice()
@@ -124,26 +167,41 @@ func (proxy *PacketListenerProxy) NewSession(respWriter PacketResponseReceiver) 
 				}
 				return
 			}
-			if _, err := respWriter.WriteFrom(buf[:n], srcAddr); err != nil {
+			if _, err := s.respReceiver.WriteFrom(buf[:n], srcAddr); err != nil {
 				return
 			}
 		}
 	}()
 
-	return reqSender, nil
+	return nil
 }
 
 // WriteTo implements [PacketRequestSender].WriteTo function. It simply forwards the packet to the underlying
 // [net.PacketConn].WriteTo function.
 func (s *packetListenerRequestSender) WriteTo(p []byte, destination netip.AddrPort) (int, error) {
-	if err := s.resetWriteIdleTimer(); err != nil {
+	s.mu.Lock()
+	if s.closed {
+		s.mu.Unlock()
+		return 0, ErrClosed
+	}
+
+	if err := s.getProxyConnLocked(); err != nil {
+		s.mu.Unlock()
 		return 0, err
 	}
-	return s.proxyConn.WriteTo(p, net.UDPAddrFromAddrPort(destination))
+
+	// Refresh the idle timer and read deadline.
+	s.writeIdleTimer.Reset(s.writeIdleTimeout)
+	s.proxyConn.SetReadDeadline(time.Now().Add(s.writeIdleTimeout))
+
+	conn := s.proxyConn
+	s.mu.Unlock()
+
+	return conn.WriteTo(p, net.UDPAddrFromAddrPort(destination))
 }
 
 // Close implements [PacketRequestSender].Close function. It closes the underlying [net.PacketConn]. This will also
-// terminate the goroutine created in NewSession because s.conn.ReadFrom will return [io.EOF].
+// terminate the goroutine created in WriteTo because s.proxyConn.ReadFrom will return an error.
 func (s *packetListenerRequestSender) Close() error {
 	s.mu.Lock()
 	if s.closed {
@@ -151,21 +209,20 @@ func (s *packetListenerRequestSender) Close() error {
 		return ErrClosed
 	}
 	s.closed = true
-	s.writeIdleTimer.Stop()
-	s.mu.Unlock()
-	return s.proxyConn.Close()
-}
-
-// resetWriteIdleTimer extends the writeIdleTimer's timeout to now() + writeIdleTimeout. If `s` is closed, it will
-// return ErrClosed.
-func (s *packetListenerRequestSender) resetWriteIdleTimer() error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-
-	if s.closed {
-		return ErrClosed
+	if s.writeIdleTimer != nil {
+		s.writeIdleTimer.Stop()
+		s.writeIdleTimer = nil
 	}
-	s.writeIdleTimer.Reset(s.writeIdleTimeout)
-	s.proxyConn.SetReadDeadline(time.Now().Add(s.writeIdleTimeout))
+
+	conn := s.proxyConn
+	s.proxyConn = nil
+	s.mu.Unlock()
+
+	if conn != nil {
+		return conn.Close()
+	}
+	
+	// If proxyConn was never created, we must close respReceiver here
+	s.respReceiver.Close()
 	return nil
 }
