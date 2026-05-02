@@ -1,4 +1,4 @@
-// Copyright 2023 The Outline Authors
+// Copyright 2026 The Outline Authors
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -22,16 +22,16 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestWithWriteTimeoutOptionWorks(t *testing.T) {
+func TestRelayWithWriteTimeoutOptionWorks(t *testing.T) {
 	pl := &transport.UDPListener{}
 
-	defProxy, err := NewPacketProxyFromPacketListener(pl)
+	defRelay, err := NewPacketRelayFromPacketListener(pl)
 	require.NoError(t, err)
-	require.NotNil(t, defProxy)
-	require.Equal(t, 30*time.Second, defProxy.relay.writeIdleTimeout) // default timeout is 30s
+	require.NotNil(t, defRelay)
+	require.Equal(t, 30*time.Second, defRelay.writeIdleTimeout) // default timeout is 30s
 
-	altProxy, err := NewPacketProxyFromPacketListener(pl, WithPacketListenerWriteIdleTimeout(5*time.Minute))
+	altRelay, err := NewPacketRelayFromPacketListener(pl, WithPacketListenerRelayWriteIdleTimeout(5*time.Minute))
 	require.NoError(t, err)
-	require.NotNil(t, altProxy)
-	require.Equal(t, 5*time.Minute, altProxy.relay.writeIdleTimeout)
+	require.NotNil(t, altRelay)
+	require.Equal(t, 5*time.Minute, altRelay.writeIdleTimeout)
 }

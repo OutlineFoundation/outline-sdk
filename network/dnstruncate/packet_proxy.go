@@ -15,13 +15,10 @@
 package dnstruncate
 
 import (
-	"errors"
 	"fmt"
-	"net"
 	"net/netip"
-	"sync/atomic"
+	"sync"
 
-	"golang.getoutline.org/sdk/internal/slicepool"
 	"golang.getoutline.org/sdk/network"
 )
 
@@ -61,94 +58,130 @@ const (
 	dnsARCntEndByte    = 7           // The ending byte (inclusive) of ANCOUNT
 )
 
-// packetBufferPool is used to create buffers to modify DNS requests
-var packetBufferPool = slicepool.MakePool(dnsUdpMaxMsgLen)
-
-// dnsTruncateProxy is a network.PacketProxy that create dnsTruncateRequestHandler to handle DNS requests locally.
-//
-// Multiple goroutines may invoke methods on a dnsTruncateProxy simultaneously.
-type dnsTruncateProxy struct {
-}
-
-// dnsTruncateRequestHandler is a network.PacketRequestSender that handles DNS requests in UDP protocol locally,
-// without sending the requests to the actual DNS resolver. It sets the TC (truncated) bit in the DNS response header
-// to tell the caller to resend the DNS request over TCP.
-//
-// Multiple goroutines may invoke methods on a dnsTruncateProxy simultaneously.
-type dnsTruncateRequestHandler struct {
-	closed     atomic.Bool
-	respWriter network.PacketResponseReceiver
-}
-
-// Compilation guard against interface implementation
-var _ network.PacketProxy = (*dnsTruncateProxy)(nil)
-var _ network.PacketRequestSender = (*dnsTruncateRequestHandler)(nil)
-
 // NewPacketProxy creates a new [network.PacketProxy] that can be used to handle DNS requests if the remote proxy
 // doesn't support UDP traffic. It sets the TC (truncated) bit in the DNS response header to tell the caller to resend
 // the DNS request over TCP.
-//
-// This [network.PacketProxy] should only be used if the remote proxy server doesn't support UDP traffic at all. Note
-// that all other non-DNS UDP packets will be dropped by this [network.PacketProxy].
 func NewPacketProxy() (network.PacketProxy, error) {
+	relay, err := NewPacketRelay()
+	if err != nil {
+		return nil, err
+	}
+	return network.NewPacketProxyFromPacketRelay(relay), nil
+}
+
+// dnsTruncateProxy is a network.PacketRelay that creates dnsTruncateSender to handle DNS requests locally.
+//
+// Multiple goroutines may invoke methods on a dnsTruncateProxy simultaneously.
+type dnsTruncateProxy struct{}
+
+type dnsPacket struct {
+	payload []byte
+	source  netip.AddrPort
+}
+
+// dnsTruncateSender is a network.PacketSender that handles DNS requests in UDP protocol locally,
+// without sending the requests to the actual DNS resolver. It sets the TC (truncated) bit in the DNS response header
+// to tell the caller to resend the DNS request over TCP.
+type dnsTruncateSender struct {
+	mu     sync.Mutex
+	closed bool
+	ch     chan dnsPacket
+}
+
+type dnsTruncateReceiver struct {
+	ch chan dnsPacket
+}
+
+// Compilation guard against interface implementation
+var _ network.PacketRelay = (*dnsTruncateProxy)(nil)
+var _ network.PacketSender = (*dnsTruncateSender)(nil)
+var _ network.PacketReceiver = (*dnsTruncateReceiver)(nil)
+
+// NewPacketRelay creates a new [network.PacketRelay] that can be used to handle DNS requests if the remote proxy
+// doesn't support UDP traffic. It sets the TC (truncated) bit in the DNS response header to tell the caller to resend
+// the DNS request over TCP.
+//
+// This [network.PacketRelay] should only be used if the remote proxy server doesn't support UDP traffic at all. Note
+// that all other non-DNS UDP packets will be dropped by this [network.PacketRelay].
+func NewPacketRelay() (network.PacketRelay, error) {
 	return &dnsTruncateProxy{}, nil
 }
 
-// NewSession implements [network.PacketProxy].NewSession(). It creates a new [network.PacketRequestSender] that will
-// set the TC (truncated) bit and write the response to `respWriter`.
-func (p *dnsTruncateProxy) NewSession(respWriter network.PacketResponseReceiver) (network.PacketRequestSender, error) {
-	if respWriter == nil {
-		return nil, errors.New("respWriter is required")
+// NewAssociation implements [network.PacketRelay].NewAssociation(). It creates a new [network.PacketSender] and
+// [network.PacketReceiver] that will set the TC (truncated) bit on incoming DNS requests and yield the response.
+func (p *dnsTruncateProxy) NewAssociation() (network.PacketSender, network.PacketReceiver, error) {
+	// Buffer size of 16 is a reasonable trade-off for local DNS truncation
+	ch := make(chan dnsPacket, 16)
+	sender := &dnsTruncateSender{
+		ch: ch,
 	}
-	return &dnsTruncateRequestHandler{
-		respWriter: respWriter,
-	}, nil
+	receiver := &dnsTruncateReceiver{
+		ch: ch,
+	}
+	return sender, receiver, nil
 }
 
-// Close implements [network.PacketRequestSender].Close(), and it closes the corresponding
-// [network.PacketResponseReceiver].
-func (h *dnsTruncateRequestHandler) Close() error {
-	if !h.closed.CompareAndSwap(false, true) {
+// Close implements [network.PacketSender].Close(), and it closes the corresponding
+// [network.PacketReceiver] channel.
+func (s *dnsTruncateSender) Close() error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.closed {
 		return network.ErrClosed
 	}
-	h.respWriter.Close()
+	s.closed = true
+	close(s.ch)
 	return nil
 }
 
-// WriteTo implements [network.PacketRequestSender].WriteTo(). It parses a packet from p, and determines whether it is
-// a valid DNS request. If so, it will write the DNS response with TC (truncated) bit set to the corresponding
-// [network.PacketResponseReceiver] passed to NewSession. If it is not a valid DNS request, the packet will be
-// discarded and returns an error.
-func (h *dnsTruncateRequestHandler) WriteTo(p []byte, destination netip.AddrPort) (int, error) {
-	if h.closed.Load() {
-		return 0, network.ErrClosed
+// SendPacket implements [network.PacketSender].SendPacket(). It parses a packet from p, and determines whether it is
+// a valid DNS request. If so, it will push a DNS response with TC (truncated) bit set to the receiver.
+func (s *dnsTruncateSender) SendPacket(p []byte, destination netip.AddrPort) error {
+	s.mu.Lock()
+	if s.closed {
+		s.mu.Unlock()
+		return network.ErrClosed
 	}
+	s.mu.Unlock()
+
 	if destination.Port() != standardDNSPort {
-		return 0, fmt.Errorf("UDP traffic to non-DNS port %v is not supported: %w", destination.Port(), network.ErrPortUnreachable)
+		return fmt.Errorf("UDP traffic to non-DNS port %v is not supported: %w", destination.Port(), network.ErrPortUnreachable)
 	}
 	if len(p) < dnsUdpMinMsgLen {
-		return 0, fmt.Errorf("invalid DNS message of length %v, it must be at least %v bytes", len(p), dnsUdpMinMsgLen)
+		return fmt.Errorf("invalid DNS message of length %v, it must be at least %v bytes", len(p), dnsUdpMinMsgLen)
 	}
 
-	// Allocate buffer from slicepool, because `go build -gcflags="-m"` shows a local array will escape to heap
-	slice := packetBufferPool.LazySlice()
-	buf := slice.Acquire()
-	defer slice.Release()
-
-	// We need to copy p into buf because "WriteTo must not modify p, even temporarily".
-	n := copy(buf, p)
+	// We need to copy p into a new buffer because we pass it through a channel
+	buf := make([]byte, len(p))
+	copy(buf, p)
 
 	// Set "Response", "Truncated" and "NoError"
-	// Note: gopacket is a good library doing this kind of things. But it will increase the binary size a lot.
-	//       If we decide to use gopacket in the future, please evaluate the binary size and runtime memory consumption.
 	buf[dnsUdpAnswerByte] |= (dnsUdpResponseBit | dnsUdpTruncatedBit)
 	buf[dnsUdpRCodeByte] &= ^dnsUdpRCodeMask
 
 	// Copy QDCOUNT to ANCOUNT. This is an incorrect workaround for some DNS clients (such as Windows 7);
 	// because without these clients won't retry over TCP.
-	//
-	// For reference: https://github.com/eycorsican/go-tun2socks/blob/master/proxy/dnsfallback/udp.go#L59-L63
 	copy(buf[dnsARCntStartByte:dnsARCntEndByte+1], buf[dnsQDCntStartByte:dnsQDCntEndByte+1])
 
-	return h.respWriter.WriteFrom(buf[:n], net.UDPAddrFromAddrPort(destination))
+	s.mu.Lock()
+	if s.closed {
+		s.mu.Unlock()
+		return network.ErrClosed
+	}
+	s.ch <- dnsPacket{payload: buf, source: destination}
+	s.mu.Unlock()
+
+	return nil
+}
+
+// ReceivePackets implements [network.PacketReceiver].ReceivePackets. It blocks and passes incoming DNS responses
+// to the handler.
+func (r *dnsTruncateReceiver) ReceivePackets(handler network.PacketHandler) error {
+	defer handler.Close()
+	for pkt := range r.ch {
+		if err := handler.HandlePacket(pkt.payload, pkt.source); err != nil {
+			return err
+		}
+	}
+	return nil
 }

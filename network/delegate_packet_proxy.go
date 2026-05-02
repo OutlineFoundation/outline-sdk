@@ -42,7 +42,7 @@ var errInvalidProxy = errors.New("the underlying proxy must not be nil")
 var _ DelegatePacketProxy = (*delegatePacketProxy)(nil)
 
 type delegatePacketProxy struct {
-	// The underlying PacketProxy when create NewSession.
+	// The underlying PacketProxy when creating NewSession.
 	// Note that we must not use atomic.Value; otherwise TestSetProxyOfDifferentTypes will panic with
 	// "store inconsistently typed value".
 	proxy atomic.Pointer[PacketProxy]
