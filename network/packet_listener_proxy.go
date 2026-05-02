@@ -140,6 +140,10 @@ func (s *packetListenerRequestSender) getProxyConnLocked() error {
 		return nil
 	}
 
+	// Reset the timer before the slow ListenPacket call to prevent it from firing
+	// while we are blocked here.
+	s.writeIdleTimer.Reset(s.writeIdleTimeout)
+
 	ctx, cancel := context.WithTimeout(context.Background(), s.writeIdleTimeout)
 	defer cancel()
 

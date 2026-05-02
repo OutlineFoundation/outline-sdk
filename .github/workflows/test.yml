@@ -61,13 +61,11 @@ jobs:
 
       - name: Test SDK
         # Enable nettests, which executes external network requests.
-        # TODO(fortuna): Remove GOEXPERIMENT=synctest when migrating to Go 1.25.
-        run: GOEXPERIMENT=synctest go test -tags nettest -race -bench '.' ./... -benchtime=100ms
+        run: go test -tags nettest -race -bench '.' ./... -benchtime=100ms
 
       - name: Test x
         # Enable nettests, which executes external network requests.
-        # TODO(fortuna): Remove GOEXPERIMENT=synctest when migrating to Go 1.25.
-        run: GOEXPERIMENT=synctest go test -C x -tags nettest,psiphon -race -bench '.' ./... -benchtime=100ms
+        run: go test -C x -tags nettest,psiphon -race -bench '.' ./... -benchtime=100ms
 
   android-test:
     runs-on: ubuntu-latest
@@ -142,7 +140,6 @@ jobs:
           script: |
             # We can't set environment variables in this script, nor refer to $ANDROID_NDK_HOME in the job.step.env block, so
             # we set it explicitly here. (#pain)
-            # TODO(fortuna): Remove GOEXPERIMENT=synctest when migrating to Go 1.25.
-            CC="$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin/x86_64-linux-android${{ matrix.api-level }}-clang" GOOS=android GOARCH=amd64 CGO_ENABLED=1 GOEXPERIMENT=synctest go test -tags nettest -exec "${{ github.workspace }}/run_on_android.sh" -v ./...
+            CC="$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin/x86_64-linux-android${{ matrix.api-level }}-clang" GOOS=android GOARCH=amd64 CGO_ENABLED=1 go test -tags nettest -exec "${{ github.workspace }}/run_on_android.sh" -v ./...
             # TODO(fortuna): Fix psiphon and support testdata.
-            CC="$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin/x86_64-linux-android${{ matrix.api-level }}-clang" GOOS=android GOARCH=amd64 CGO_ENABLED=1 GOEXPERIMENT=synctest go test -C x -tags nettest,psiphon -exec "${{ github.workspace }}/run_on_android.sh" -v ./...
+            CC="$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin/x86_64-linux-android${{ matrix.api-level }}-clang" GOOS=android GOARCH=amd64 CGO_ENABLED=1 go test -C x -tags nettest,psiphon -exec "${{ github.workspace }}/run_on_android.sh" -v ./...

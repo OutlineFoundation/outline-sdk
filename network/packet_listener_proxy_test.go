@@ -275,8 +275,6 @@ func TestUninitializedRetry(t *testing.T) {
 		_, err = sender.WriteTo([]byte("hello again"), netip.MustParseAddrPort("127.0.0.1:1234"))
 		require.NoError(t, err)
 		require.Equal(t, 2, mockListener.getListenCount())
-
-		sender.Close()
 	})
 }
 
@@ -380,8 +378,6 @@ func TestListenPacketTimeout(t *testing.T) {
 		_, err = sender.WriteTo([]byte("hello"), netip.MustParseAddrPort("127.0.0.1:1234"))
 		require.Error(t, err)
 		require.True(t, errors.Is(err, context.DeadlineExceeded))
-
-		sender.Close()
 	})
 }
 
@@ -400,19 +396,17 @@ func TestConcurrency(t *testing.T) {
 	var wg sync.WaitGroup
 	for i := 0; i < 50; i++ {
 		wg.Add(1)
-		go func(val int) {
+		go func() {
 			defer wg.Done()
 			_, err := sender.WriteTo([]byte("data"), netip.MustParseAddrPort("127.0.0.1:1234"))
 			require.NoError(t, err)
-		}(i)
+		}()
 	}
 
 	wg.Wait()
 
 	// Verify ListenPacket called EXACTLY ONCE
 	require.Equal(t, 1, mockListener.getListenCount())
-
-	sender.Close()
 }
 
 func TestRecoverableErrors(t *testing.T) {
@@ -457,7 +451,5 @@ func TestRecoverableErrors(t *testing.T) {
 		case <-time.After(1 * time.Second):
 			t.Fatal("Receiver should have received valid data")
 		}
-
-		sender.Close()
 	})
 }
