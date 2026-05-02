@@ -27,7 +27,8 @@ type PacketProxy interface {
 	// NewSession function tells the PacketProxy that a new UDP socket session has been started (using socket as an
 	// example, a session will be started by calling the bind() function). The PacketProxy then creates a
 	// PacketRequestSender object to handle requests from this session, and it also uses the PacketResponseReceiver
-	// to send responses back to the upstream network stack.
+	// to send responses back to the upstream network stack. The PacketResponseReceiver is effectively providing
+	// callbacks to notify the caller of each received packet (WriteFrom), and when the stream is closed (Close).
 	//
 	// Note that it is possible for a session to receive UDP packets without sending any requests.
 	NewSession(PacketResponseReceiver) (PacketRequestSender, error)
@@ -48,8 +49,8 @@ type PacketRequestSender interface {
 	// `p` must not be modified, and it must not be referenced after WriteTo returns.
 	WriteTo(p []byte, destination netip.AddrPort) (int, error)
 
-	// Close indicates that the sender is no longer accepting new requests. Any future attempts to call WriteTo on the
-	// sender will fail with ErrClosed.
+	// Close indicates that no more calls to WriteTo will be made. Any future attempts to call WriteTo
+	// should fail with ErrClosed.
 	Close() error
 }
 
@@ -68,7 +69,7 @@ type PacketResponseReceiver interface {
 	// `p` must not be modified, and it must not be referenced after WriteFrom returns.
 	WriteFrom(p []byte, source net.Addr) (int, error)
 
-	// Close indicates that the receiver is no longer accepting new responses. Any future attempts to call WriteFrom on
-	// the receiver will fail with ErrClosed.
+	// Close indicates that no more calls to WriteFrom will be made. Any future attempts to call WriteFrom
+	// should fail with ErrClosed.
 	Close() error
 }

@@ -146,13 +146,13 @@ func (s *packetListenerRequestSender) WriteTo(p []byte, destination netip.AddrPo
 // terminate the goroutine created in NewSession because s.conn.ReadFrom will return [io.EOF].
 func (s *packetListenerRequestSender) Close() error {
 	s.mu.Lock()
-	defer s.mu.Unlock()
-
 	if s.closed {
+		s.mu.Unlock()
 		return ErrClosed
 	}
 	s.closed = true
 	s.writeIdleTimer.Stop()
+	s.mu.Unlock()
 	return s.proxyConn.Close()
 }
 
@@ -166,5 +166,6 @@ func (s *packetListenerRequestSender) resetWriteIdleTimer() error {
 		return ErrClosed
 	}
 	s.writeIdleTimer.Reset(s.writeIdleTimeout)
+	s.proxyConn.SetReadDeadline(time.Now().Add(s.writeIdleTimeout))
 	return nil
 }
