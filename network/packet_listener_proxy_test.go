@@ -28,10 +28,10 @@ func TestWithWriteTimeoutOptionWorks(t *testing.T) {
 	defProxy, err := NewPacketProxyFromPacketListener(pl)
 	require.NoError(t, err)
 	require.NotNil(t, defProxy)
-	require.Equal(t, 30*time.Second, defProxy.relay.writeIdleTimeout) // default timeout is 30s
+	require.Equal(t, 30*time.Second, defProxy.writeIdleTimeout) // default timeout is 30s
 
 	altProxy, err := NewPacketProxyFromPacketListener(pl, WithPacketListenerWriteIdleTimeout(5*time.Minute))
 	require.NoError(t, err)
 	require.NotNil(t, altProxy)
-	require.Equal(t, 5*time.Minute, altProxy.relay.writeIdleTimeout)
+	require.Equal(t, 5*time.Minute, altProxy.writeIdleTimeout)
 }

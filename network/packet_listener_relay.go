@@ -21,7 +21,6 @@ import (
 	"net"
 	"net/netip"
 	"sync"
-	"time"
 
 	"golang.getoutline.org/sdk/internal/slicepool"
 	"golang.getoutline.org/sdk/transport"
@@ -41,8 +40,7 @@ var _ PacketReceiver = (*packetListenerReceiver)(nil)
 // PacketListenerRelay creates a new [PacketRelay] that uses the existing [transport.PacketListener] to
 // create connections to a relay.
 type PacketListenerRelay struct {
-	listener         transport.PacketListener
-	writeIdleTimeout time.Duration
+	listener transport.PacketListener
 }
 
 // NewPacketRelayFromPacketListener creates a new [PacketRelay] that uses the existing [transport.PacketListener] to
@@ -54,8 +52,7 @@ func NewPacketRelayFromPacketListener(pl transport.PacketListener, options ...fu
 		return nil, errors.New("pl must not be nil")
 	}
 	r := &PacketListenerRelay{
-		listener:         pl,
-		writeIdleTimeout: 30 * time.Second,
+		listener: pl,
 	}
 	for _, opt := range options {
 		if err := opt(r); err != nil {
@@ -63,19 +60,6 @@ func NewPacketRelayFromPacketListener(pl transport.PacketListener, options ...fu
 		}
 	}
 	return r, nil
-}
-
-// WithPacketListenerRelayWriteIdleTimeout sets the write idle timeout of the [PacketListenerRelay].
-// This means that if there are no SendPacket operations on the UDP association created by NewAssociation
-// for the specified amount of time, the relay will end this association.
-func WithPacketListenerRelayWriteIdleTimeout(timeout time.Duration) func(*PacketListenerRelay) error {
-	return func(r *PacketListenerRelay) error {
-		if timeout <= 0 {
-			return errors.New("timeout must be greater than 0")
-		}
-		r.writeIdleTimeout = timeout
-		return nil
-	}
 }
 
 // NewAssociation implements [PacketRelay].NewAssociation. It uses [transport.PacketListener].ListenPacket to create
@@ -87,14 +71,8 @@ func (relay *PacketListenerRelay) NewAssociation() (PacketSender, PacketReceiver
 	}
 
 	sender := &packetListenerSender{
-		proxyConn:        proxyConn,
-		writeIdleTimeout: relay.writeIdleTimeout,
+		proxyConn: proxyConn,
 	}
-
-	// Terminate the session after timeout with no outgoing writes (deadline is refreshed by SendPacket)
-	sender.writeIdleTimer = time.AfterFunc(sender.writeIdleTimeout, func() {
-		sender.Close()
-	})
 
 	receiver := &packetListenerReceiver{
 		proxyConn: proxyConn,
@@ -104,20 +82,22 @@ func (relay *PacketListenerRelay) NewAssociation() (PacketSender, PacketReceiver
 }
 
 type packetListenerSender struct {
-	mu     sync.Mutex // Protects closed and timer function calls
+	mu     sync.Mutex // Protects closed flag
 	closed bool
 
-	proxyConn        net.PacketConn
-	writeIdleTimeout time.Duration
-	writeIdleTimer   *time.Timer
+	proxyConn net.PacketConn
 }
 
 // SendPacket implements [PacketSender].SendPacket. It simply forwards the packet to the underlying
 // [net.PacketConn].WriteTo function.
 func (s *packetListenerSender) SendPacket(p []byte, destination netip.AddrPort) error {
-	if err := s.resetWriteIdleTimer(); err != nil {
-		return err
+	s.mu.Lock()
+	if s.closed {
+		s.mu.Unlock()
+		return ErrClosed
 	}
+	s.mu.Unlock()
+
 	_, err := s.proxyConn.WriteTo(p, net.UDPAddrFromAddrPort(destination))
 	return err
 }
@@ -132,21 +112,7 @@ func (s *packetListenerSender) Close() error {
 		return ErrClosed
 	}
 	s.closed = true
-	s.writeIdleTimer.Stop()
 	return s.proxyConn.Close()
-}
-
-// resetWriteIdleTimer extends the writeIdleTimer's timeout to now() + writeIdleTimeout. If `s` is closed, it will
-// return ErrClosed.
-func (s *packetListenerSender) resetWriteIdleTimer() error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-
-	if s.closed {
-		return ErrClosed
-	}
-	s.writeIdleTimer.Reset(s.writeIdleTimeout)
-	return nil
 }
 
 type packetListenerReceiver struct {

@@ -16,22 +16,15 @@ package network
 
 import (
 	"testing"
-	"time"
 
 	"golang.getoutline.org/sdk/transport"
 	"github.com/stretchr/testify/require"
 )
 
-func TestRelayWithWriteTimeoutOptionWorks(t *testing.T) {
+func TestNewPacketRelayFromPacketListener(t *testing.T) {
 	pl := &transport.UDPListener{}
 
-	defRelay, err := NewPacketRelayFromPacketListener(pl)
+	relay, err := NewPacketRelayFromPacketListener(pl)
 	require.NoError(t, err)
-	require.NotNil(t, defRelay)
-	require.Equal(t, 30*time.Second, defRelay.writeIdleTimeout) // default timeout is 30s
-
-	altRelay, err := NewPacketRelayFromPacketListener(pl, WithPacketListenerRelayWriteIdleTimeout(5*time.Minute))
-	require.NoError(t, err)
-	require.NotNil(t, altRelay)
-	require.Equal(t, 5*time.Minute, altRelay.writeIdleTimeout)
+	require.NotNil(t, relay)
 }

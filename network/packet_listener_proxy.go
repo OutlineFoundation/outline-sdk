@@ -26,20 +26,23 @@ var _ PacketProxy = (*PacketListenerProxy)(nil)
 // PacketListenerProxy creates a new [PacketProxy] that uses the existing [transport.PacketListener] to
 // create connections to a proxy.
 type PacketListenerProxy struct {
-	relay *PacketListenerRelay
+	relay            PacketRelay
+	baseRelay        *PacketListenerRelay
+	writeIdleTimeout time.Duration
 }
 
 // NewPacketProxyFromPacketListener creates a new [PacketProxy] that uses the existing [transport.PacketListener] to
 // create connections to a proxy. You can also specify additional options.
 func NewPacketProxyFromPacketListener(pl transport.PacketListener, options ...func(*PacketListenerProxy) error) (*PacketListenerProxy, error) {
-	// Create the underlying relay
-	relay, err := NewPacketRelayFromPacketListener(pl)
+	// Create the underlying base relay
+	baseRelay, err := NewPacketRelayFromPacketListener(pl)
 	if err != nil {
 		return nil, err
 	}
 
 	p := &PacketListenerProxy{
-		relay: relay,
+		baseRelay:        baseRelay,
+		writeIdleTimeout: 30 * time.Second, // Default timeout
 	}
 
 	// Apply options
@@ -49,6 +52,13 @@ func NewPacketProxyFromPacketListener(pl transport.PacketListener, options ...fu
 		}
 	}
 
+	// Build the final relay chain: TimeoutPacketRelay(PacketListenerRelay)
+	timeoutRelay, err := NewTimeoutPacketRelay(p.baseRelay, p.writeIdleTimeout)
+	if err != nil {
+		return nil, err
+	}
+	p.relay = timeoutRelay
+
 	return p, nil
 }
 
@@ -57,8 +67,8 @@ func NewPacketProxyFromPacketListener(pl transport.PacketListener, options ...fu
 // of time, the proxy will end this session.
 func WithPacketListenerWriteIdleTimeout(timeout time.Duration) func(*PacketListenerProxy) error {
 	return func(p *PacketListenerProxy) error {
-		// Apply to the underlying relay
-		return WithPacketListenerRelayWriteIdleTimeout(timeout)(p.relay)
+		p.writeIdleTimeout = timeout
+		return nil
 	}
 }
 
