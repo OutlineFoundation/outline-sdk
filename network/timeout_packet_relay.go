@@ -56,25 +56,25 @@ func (r *TimeoutPacketRelay) NewAssociation() (PacketSender, PacketReceiver, err
 	}
 
 	tSender := &timeoutPacketSender{
-		inner:   sender,
-		timeout: r.timeout,
+		inner:        sender,
+		timeout:      r.timeout,
+		lastActivity: time.Now(),
 	}
 
 	tSender.mu.Lock()
-	tSender.timer = time.AfterFunc(r.timeout, func() {
-		_ = tSender.Close()
-	})
+	tSender.timer = time.AfterFunc(r.timeout, tSender.checkTimeout)
 	tSender.mu.Unlock()
 
 	return tSender, receiver, nil
 }
 
 type timeoutPacketSender struct {
-	mu      sync.Mutex
-	closed  bool
-	inner   PacketSender
-	timer   *time.Timer
-	timeout time.Duration
+	mu           sync.Mutex
+	closed       bool
+	inner        PacketSender
+	timer        *time.Timer
+	timeout      time.Duration
+	lastActivity time.Time
 }
 
 func (s *timeoutPacketSender) SendPacket(p []byte, destination netip.AddrPort) error {
@@ -83,10 +83,35 @@ func (s *timeoutPacketSender) SendPacket(p []byte, destination netip.AddrPort) e
 		s.mu.Unlock()
 		return ErrClosed
 	}
-	s.timer.Reset(s.timeout)
+	s.lastActivity = time.Now()
 	s.mu.Unlock()
 
 	return s.inner.SendPacket(p, destination)
+}
+
+func (s *timeoutPacketSender) checkTimeout() {
+	s.mu.Lock()
+	if s.closed {
+		s.mu.Unlock()
+		return
+	}
+
+	// We check the actual elapsed time since the last activity.
+	// This is necessary because a time.AfterFunc goroutine can be scheduled
+	// by the Go runtime but not yet executed when SendPacket is called. 
+	// If we just blindly closed the session here, the Close() would execute
+	// AFTER a successful SendPacket, leading to unexpected out-of-order
+	// behavior (a successful send immediately followed by a close).
+	elapsed := time.Since(s.lastActivity)
+	if elapsed >= s.timeout {
+		s.mu.Unlock()
+		_ = s.Close()
+		return
+	}
+
+	// Not expired yet! Reschedule for the remaining time.
+	s.timer.Reset(s.timeout - elapsed)
+	s.mu.Unlock()
 }
 
 func (s *timeoutPacketSender) Close() error {

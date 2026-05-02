@@ -15,6 +15,7 @@
 package dnstruncate
 
 import (
+	"errors"
 	"fmt"
 	"net/netip"
 	"sync"
@@ -58,19 +59,6 @@ const (
 	dnsARCntEndByte    = 7           // The ending byte (inclusive) of ANCOUNT
 )
 
-// NewPacketProxy creates a new [network.PacketProxy] that can be used to handle DNS requests if the remote proxy
-// doesn't support UDP traffic. It sets the TC (truncated) bit in the DNS response header to tell the caller to resend
-// the DNS request over TCP.
-//
-// Deprecated: Use [NewPacketRelay] instead.
-func NewPacketProxy() (network.PacketProxy, error) {
-	relay, err := NewPacketRelay()
-	if err != nil {
-		return nil, err
-	}
-	return network.NewPacketProxyFromPacketRelay(relay), nil
-}
-
 // dnsTruncateProxy is a network.PacketRelay that creates dnsTruncateSender to handle DNS requests locally.
 //
 // Multiple goroutines may invoke methods on a dnsTruncateProxy simultaneously.
@@ -109,6 +97,19 @@ func NewPacketRelay() (network.PacketRelay, error) {
 	return &dnsTruncateProxy{}, nil
 }
 
+// NewPacketProxy creates a new [network.PacketProxy] that can be used to handle DNS requests if the remote proxy
+// doesn't support UDP traffic. It sets the TC (truncated) bit in the DNS response header to tell the caller to resend
+// the DNS request over TCP.
+//
+// Deprecated: Use [NewPacketRelay] instead.
+func NewPacketProxy() (network.PacketProxy, error) {
+	relay, err := NewPacketRelay()
+	if err != nil {
+		return nil, err
+	}
+	return network.NewPacketProxyFromPacketRelay(relay), nil
+}
+
 // NewAssociation implements [network.PacketRelay].NewAssociation(). It creates a new [network.PacketSender] and
 // [network.PacketReceiver] that will set the TC (truncated) bit on incoming DNS requests and yield the response.
 func (p *dnsTruncateProxy) NewAssociation() (network.PacketSender, network.PacketReceiver, error) {
@@ -127,15 +128,12 @@ func (p *dnsTruncateProxy) NewAssociation() (network.PacketSender, network.Packe
 // [network.PacketReceiver] channel.
 func (s *dnsTruncateSender) Close() error {
 	s.mu.Lock()
+	defer s.mu.Unlock()
 	if s.closed {
-		s.mu.Unlock()
 		return network.ErrClosed
 	}
 	s.closed = true
-	ch := s.ch
-	s.mu.Unlock()
-
-	close(ch)
+	close(s.ch)
 	return nil
 }
 
@@ -143,11 +141,11 @@ func (s *dnsTruncateSender) Close() error {
 // a valid DNS request. If so, it will push a DNS response with TC (truncated) bit set to the receiver.
 func (s *dnsTruncateSender) SendPacket(p []byte, destination netip.AddrPort) error {
 	s.mu.Lock()
+	defer s.mu.Unlock()
+
 	if s.closed {
-		s.mu.Unlock()
 		return network.ErrClosed
 	}
-	s.mu.Unlock()
 
 	if destination.Port() != standardDNSPort {
 		return fmt.Errorf("UDP traffic to non-DNS port %v is not supported: %w", destination.Port(), network.ErrPortUnreachable)
@@ -168,15 +166,14 @@ func (s *dnsTruncateSender) SendPacket(p []byte, destination netip.AddrPort) err
 	// because without these clients won't retry over TCP.
 	copy(buf[dnsARCntStartByte:dnsARCntEndByte+1], buf[dnsQDCntStartByte:dnsQDCntEndByte+1])
 
-	s.mu.Lock()
-	if s.closed {
-		s.mu.Unlock()
-		return network.ErrClosed
+	// Push to channel inside the lock using select with default to avoid deadlocks
+	select {
+	case s.ch <- dnsPacket{payload: buf, source: destination}:
+		return nil
+	default:
+		// Queue is full!
+		return errors.New("DNS truncation queue full")
 	}
-	s.ch <- dnsPacket{payload: buf, source: destination}
-	s.mu.Unlock()
-
-	return nil
 }
 
 // ReceivePackets implements [network.PacketReceiver].ReceivePackets. It blocks and passes incoming DNS responses

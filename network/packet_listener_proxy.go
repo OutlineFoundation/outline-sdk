@@ -15,6 +15,7 @@
 package network
 
 import (
+	"errors"
 	"time"
 
 	"golang.getoutline.org/sdk/transport"
@@ -73,6 +74,9 @@ func NewPacketProxyFromPacketListener(pl transport.PacketListener, options ...fu
 // Deprecated: Use [WithPacketListenerRelayWriteIdleTimeout] instead. (Note: This is now applied via the TimeoutPacketRelay decorator).
 func WithPacketListenerWriteIdleTimeout(timeout time.Duration) func(*PacketListenerProxy) error {
 	return func(p *PacketListenerProxy) error {
+		if timeout <= 0 {
+			return errors.New("timeout must be greater than 0")
+		}
 		p.writeIdleTimeout = timeout
 		return nil
 	}
