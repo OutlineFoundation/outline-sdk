@@ -23,6 +23,8 @@ import (
 // PacketProxy handles UDP traffic from the upstream network stack. The upstream network stack uses the NewSession
 // function to create a new UDP session that can send or receive UDP packets from PacketProxy.
 //
+// Deprecated: Use [PacketRelay] instead.
+//
 // Multiple goroutines can simultaneously invoke methods on a PacketProxy.
 type PacketProxy interface {
 	// NewSession function tells the PacketProxy that a new UDP socket session has been started.
@@ -32,6 +34,8 @@ type PacketProxy interface {
 }
 
 // PacketRequestSender sends UDP request packets to the [PacketProxy].
+//
+// Deprecated: Use [PacketSender] instead.
 type PacketRequestSender interface {
 	// WriteTo sends a UDP request packet to the PacketProxy. The packet is destined for the remote server
 	// identified by `destination` and the payload of the packet is stored in `p`.
@@ -43,6 +47,8 @@ type PacketRequestSender interface {
 }
 
 // PacketResponseReceiver receives UDP response packets from the [PacketProxy].
+//
+// Deprecated: Use [PacketHandler] instead.
 type PacketResponseReceiver interface {
 	// WriteFrom is a callback function that is called by a PacketProxy when a UDP response packet is received.
 	// The `source` identifies the remote server that sent the packet and the `p` contains the packet payload.
@@ -55,6 +61,8 @@ type PacketResponseReceiver interface {
 
 // NewPacketProxyFromPacketRelay adapts a [PacketRelay] to the [PacketProxy] interface.
 // This allows using new PacketRelay implementations where the old PacketProxy API is required.
+//
+// Deprecated: Use the new [PacketRelay] API directly.
 func NewPacketProxyFromPacketRelay(relay PacketRelay) PacketProxy {
 	if relay == nil {
 		return nil

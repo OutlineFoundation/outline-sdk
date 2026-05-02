@@ -61,6 +61,8 @@ const (
 // NewPacketProxy creates a new [network.PacketProxy] that can be used to handle DNS requests if the remote proxy
 // doesn't support UDP traffic. It sets the TC (truncated) bit in the DNS response header to tell the caller to resend
 // the DNS request over TCP.
+//
+// Deprecated: Use [NewPacketRelay] instead.
 func NewPacketProxy() (network.PacketProxy, error) {
 	relay, err := NewPacketRelay()
 	if err != nil {
