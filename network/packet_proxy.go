@@ -78,9 +78,9 @@ func (a *packetRelayToProxyAdapter) NewSession(respReceiver PacketResponseReceiv
 
 	// Start the receive loop to push packets to respReceiver
 	go func() {
-		// ReceivePackets will call handler.Close() when it returns.
-		// Our handler adapter will delegate Close() to respReceiver!
+		// When ReceivePackets returns, the stream has ended, so we close respReceiver.
 		_ = receiver.ReceivePackets(&packetHandlerAdapter{respReceiver: respReceiver})
+		_ = respReceiver.Close()
 	}()
 
 	return &packetSenderToRequestSenderAdapter{sender: sender}, nil
@@ -94,10 +94,6 @@ func (h *packetHandlerAdapter) HandlePacket(p []byte, source netip.AddrPort) err
 	// Convert netip.AddrPort to *net.UDPAddr for WriteFrom
 	_, err := h.respReceiver.WriteFrom(p, net.UDPAddrFromAddrPort(source))
 	return err
-}
-
-func (h *packetHandlerAdapter) Close() error {
-	return h.respReceiver.Close()
 }
 
 type packetSenderToRequestSenderAdapter struct {

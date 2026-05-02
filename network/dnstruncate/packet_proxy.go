@@ -125,12 +125,15 @@ func (p *dnsTruncateProxy) NewAssociation() (network.PacketSender, network.Packe
 // [network.PacketReceiver] channel.
 func (s *dnsTruncateSender) Close() error {
 	s.mu.Lock()
-	defer s.mu.Unlock()
 	if s.closed {
+		s.mu.Unlock()
 		return network.ErrClosed
 	}
 	s.closed = true
-	close(s.ch)
+	ch := s.ch
+	s.mu.Unlock()
+
+	close(ch)
 	return nil
 }
 
@@ -177,7 +180,6 @@ func (s *dnsTruncateSender) SendPacket(p []byte, destination netip.AddrPort) err
 // ReceivePackets implements [network.PacketReceiver].ReceivePackets. It blocks and passes incoming DNS responses
 // to the handler.
 func (r *dnsTruncateReceiver) ReceivePackets(handler network.PacketHandler) error {
-	defer handler.Close()
 	for pkt := range r.ch {
 		if err := handler.HandlePacket(pkt.payload, pkt.source); err != nil {
 			return err

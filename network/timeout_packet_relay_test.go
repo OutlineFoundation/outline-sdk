@@ -80,7 +80,7 @@ func TestTimeoutPacketRelay_ResetOnSend(t *testing.T) {
 	require.ErrorIs(t, err, ErrClosed)
 }
 
-func TestTimeoutPacketRelay_ResetOnReceive(t *testing.T) {
+func TestTimeoutPacketRelay_NoResetOnReceive(t *testing.T) {
 	mock := &mockPacketRelay{
 		closeSig:    make(chan struct{}),
 		handlerChan: make(chan PacketHandler, 1),
@@ -95,19 +95,17 @@ func TestTimeoutPacketRelay_ResetOnReceive(t *testing.T) {
 		_ = receiver.ReceivePackets(&mockPacketHandler{})
 	}()
 
-	// Capture the wrapped handler
+	// Wait for the mock receiver to start and capture the handler
 	handler := <-mock.handlerChan
 
-	// Simulate receiving packets every 50ms
+	// Simulate receiving packets every 40ms (total time 120ms > 100ms timeout)
 	for i := 0; i < 3; i++ {
-		time.Sleep(50 * time.Millisecond)
+		time.Sleep(40 * time.Millisecond)
 		err = handler.HandlePacket([]byte("reply"), netip.MustParseAddrPort("1.2.3.4:53"))
 		require.NoError(t, err)
 	}
 
-	// Now stop receiving and wait for timeout
-	time.Sleep(150 * time.Millisecond)
-
+	// The timeout (100ms) should have fired by now, even though we were receiving packets.
 	err = sender.SendPacket([]byte("hello"), netip.MustParseAddrPort("1.2.3.4:53"))
 	require.ErrorIs(t, err, ErrClosed)
 }
@@ -165,15 +163,11 @@ func (r *mockPacketReceiver) ReceivePackets(handler PacketHandler) error {
 		r.relay.handlerChan <- handler
 	}
 	<-r.relay.closeSig
-	return handler.Close()
+	return nil
 }
 
 type mockPacketHandler struct{}
 
 func (h *mockPacketHandler) HandlePacket(p []byte, src netip.AddrPort) error {
-	return nil
-}
-
-func (h *mockPacketHandler) Close() error {
 	return nil
 }

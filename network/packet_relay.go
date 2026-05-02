@@ -43,6 +43,9 @@ type PacketSender interface {
 
 	// Close indicates that no more calls to SendPacket will be made. Any future attempts
 	// to call SendPacket should fail with ErrClosed.
+	//
+	// Additionally, calling Close MUST cause any active ReceivePackets call on the
+	// associated PacketReceiver to return and release its resources.
 	Close() error
 }
 
@@ -53,7 +56,9 @@ type PacketReceiver interface {
 	// ReceivePackets blocks and passes incoming packets from the relay to the handler.
 	// It returns when the association is closed or an error occurs.
 	//
-	// Before returning, ReceivePackets MUST call handler.Close() to indicate the end of the stream.
+	// Implementations MUST ensure that calling Close on the associated PacketSender
+	// causes ReceivePackets to return.
+	//
 	ReceivePackets(handler PacketHandler) error
 }
 
@@ -68,8 +73,4 @@ type PacketHandler interface {
 	//
 	// `p` must not be modified, and it must not be referenced after HandlePacket returns.
 	HandlePacket(p []byte, source netip.AddrPort) error
-
-	// Close indicates that no more calls to HandlePacket will be made.
-	// This is called by PacketReceiver.ReceivePackets when the stream ends.
-	Close() error
 }

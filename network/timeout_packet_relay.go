@@ -22,7 +22,12 @@ import (
 )
 
 // TimeoutPacketRelay is a [PacketRelay] decorator that manages an idle timeout for packet associations.
-// If no packets are sent or received for the specified duration, the association is closed.
+// If no packets are sent for the specified duration, the association is closed.
+//
+// Note: To prevent Denial-of-Service (DoS) issues, the idle timer is ONLY reset on outgoing packets
+// ([PacketSender.SendPacket]) and NOT on incoming packets. This aligns with the recommendation in
+// RFC 4787 Section 4.3 (Mapping Refresh) to use unidirectional refresh to mitigate DoS attacks:
+// https://www.rfc-editor.org/rfc/rfc4787.html#section-4.3
 //
 // Multiple goroutines can simultaneously invoke methods on a TimeoutPacketRelay.
 type TimeoutPacketRelay struct {
@@ -43,113 +48,57 @@ func NewTimeoutPacketRelay(inner PacketRelay, timeout time.Duration) (*TimeoutPa
 }
 
 // NewAssociation implements [PacketRelay].NewAssociation. It creates a new association
-// and starts the idle timeout timer.
+// and starts the idle timeout timer on the send path.
 func (r *TimeoutPacketRelay) NewAssociation() (PacketSender, PacketReceiver, error) {
 	sender, receiver, err := r.inner.NewAssociation()
 	if err != nil {
 		return nil, nil, err
 	}
 
-	shared := &sharedTimeoutState{
-		sender:  sender,
+	tSender := &timeoutPacketSender{
+		inner:   sender,
 		timeout: r.timeout,
 	}
 
-	shared.mu.Lock()
-	shared.timer = time.AfterFunc(r.timeout, func() {
-		_ = shared.Close()
+	tSender.mu.Lock()
+	tSender.timer = time.AfterFunc(r.timeout, func() {
+		_ = tSender.Close()
 	})
-	shared.mu.Unlock()
+	tSender.mu.Unlock()
 
-	tSender := &timeoutPacketSender{
-		inner:  sender,
-		shared: shared,
-	}
-
-	tReceiver := &timeoutPacketReceiver{
-		inner:  receiver,
-		shared: shared,
-	}
-
-	return tSender, tReceiver, nil
-}
-
-type sharedTimeoutState struct {
-	mu      sync.Mutex
-	sender  PacketSender
-	timer   *time.Timer
-	timeout time.Duration
-	closed  bool
-}
-
-func (s *sharedTimeoutState) resetTimer() error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	if s.closed {
-		return ErrClosed
-	}
-	s.timer.Reset(s.timeout)
-	return nil
-}
-
-func (s *sharedTimeoutState) Close() error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	if s.closed {
-		return ErrClosed
-	}
-	s.closed = true
-	s.timer.Stop()
-	return s.sender.Close()
+	return tSender, receiver, nil
 }
 
 type timeoutPacketSender struct {
-	inner  PacketSender
-	shared *sharedTimeoutState
+	mu      sync.Mutex
+	closed  bool
+	inner   PacketSender
+	timer   *time.Timer
+	timeout time.Duration
 }
 
 func (s *timeoutPacketSender) SendPacket(p []byte, destination netip.AddrPort) error {
-	if err := s.shared.resetTimer(); err != nil {
-		return err
+	s.mu.Lock()
+	if s.closed {
+		s.mu.Unlock()
+		return ErrClosed
 	}
+	s.timer.Reset(s.timeout)
+	s.mu.Unlock()
+
 	return s.inner.SendPacket(p, destination)
 }
 
 func (s *timeoutPacketSender) Close() error {
-	return s.shared.Close()
-}
-
-type timeoutPacketReceiver struct {
-	inner  PacketReceiver
-	shared *sharedTimeoutState
-}
-
-func (r *timeoutPacketReceiver) ReceivePackets(handler PacketHandler) error {
-	tHandler := &timeoutPacketHandler{
-		inner:  handler,
-		shared: r.shared,
+	s.mu.Lock()
+	if s.closed {
+		s.mu.Unlock()
+		return ErrClosed
 	}
+	s.closed = true
+	s.timer.Stop()
+	inner := s.inner
+	s.mu.Unlock()
 
-	err := r.inner.ReceivePackets(tHandler)
-
-	// Ensure shared state is closed when the receive loop exits
-	_ = r.shared.Close()
-
-	return err
-}
-
-type timeoutPacketHandler struct {
-	inner  PacketHandler
-	shared *sharedTimeoutState
-}
-
-func (h *timeoutPacketHandler) HandlePacket(p []byte, source netip.AddrPort) error {
-	if err := h.shared.resetTimer(); err != nil {
-		return err
-	}
-	return h.inner.HandlePacket(p, source)
-}
-
-func (h *timeoutPacketHandler) Close() error {
-	return h.inner.Close()
+	return inner.Close()
 }

@@ -24,13 +24,10 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// Make sure PacketHandler Closes the corresponding PacketSender.
-func TestUDPHandlerCloseNoDeadlock(t *testing.T) {
-	relay := &noopSingleSessionPacketRelay{
-		handlerChan: make(chan network.PacketHandler, 1),
-		closeSig:    make(chan struct{}),
-	}
-	h := newUDPHandler(network.NewPacketProxyFromPacketRelay(relay))
+// Make sure PacketResponseReceiver Closes the corresponding PacketRequestSender.
+func TestUDPResponseWriterCloseNoDeadlock(t *testing.T) {
+	proxy := &noopSingleSessionPacketProxy{}
+	h := newUDPHandler(proxy)
 
 	// Create one and only one session in the proxy
 	localAddr := net.UDPAddrFromAddrPort(netip.MustParseAddrPort("127.0.0.1:60127"))
@@ -38,16 +35,13 @@ func TestUDPHandlerCloseNoDeadlock(t *testing.T) {
 	err := h.ReceiveTo(&noopLwIPUDPConn{localAddr}, []byte{}, destAddr)
 	require.NoError(t, err)
 
-	// Wait for the handler to be captured in the goroutine spawned by newAssociation
-	handler := <-relay.handlerChan
-
-	// Close the handler, it should indirectly Close the relay only once.
+	// Close proxy.respWriter, it should indirectly Close the proxy only once.
 	const ConcurrentCloseCount = 50
 	errChan := make(chan error, ConcurrentCloseCount)
 	for i := 0; i < ConcurrentCloseCount; i++ {
-		go func() {
-			errChan <- handler.Close()
-		}()
+		go func(k int) {
+			errChan <- proxy.respWriter.Close()
+		}(i)
 	}
 
 	nNilErr := 0
@@ -59,44 +53,41 @@ func TestUDPHandlerCloseNoDeadlock(t *testing.T) {
 		}
 	}
 	require.Equal(t, 1, nNilErr)
-	require.Equal(t, 1, relay.closeCnt)
+	require.Equal(t, 1, proxy.closeCnt)
 }
 
 // Make sure ReceiveTo can handle errors without deadlock.
 func TestReceiveToNoDeadlockWhenError(t *testing.T) {
-	h := newUDPHandler(network.NewPacketProxyFromPacketRelay(errPacketRelay{}))
+	h := newUDPHandler(errPacketProxy{})
 	localAddr := net.UDPAddrFromAddrPort(netip.MustParseAddrPort("127.0.0.1:60127"))
 	destAddr := net.UDPAddrFromAddrPort(netip.MustParseAddrPort("1.2.3.4:4321"))
 	err := h.ReceiveTo(&noopLwIPUDPConn{localAddr}, []byte{}, destAddr)
-	require.ErrorIs(t, err, errNewAssociation)
+	require.ErrorIs(t, err, errNewSession)
 }
 
 /********** Test Utilities **********/
 
-// noopSingleSessionPacketRelay returns a single PacketSender/Receiver that does nothing.
-type noopSingleSessionPacketRelay struct {
-	closeCnt    int
-	handlerChan chan network.PacketHandler
-	closeSig    chan struct{}
+// noopSingleSessionPacketProxy returns a single PacketRequestSender that does nothing.
+type noopSingleSessionPacketProxy struct {
+	closeCnt   int
+	respWriter network.PacketResponseReceiver
 }
 
-func (p *noopSingleSessionPacketRelay) NewAssociation() (network.PacketSender, network.PacketReceiver, error) {
-	return p, p, nil
+func (p *noopSingleSessionPacketProxy) NewSession(respWriter network.PacketResponseReceiver) (network.PacketRequestSender, error) {
+	if p.respWriter != nil {
+		return nil, errors.New("don't support multiple sessions in this proxy")
+	}
+	p.respWriter = respWriter
+	return p, nil
 }
 
-func (p *noopSingleSessionPacketRelay) SendPacket([]byte, netip.AddrPort) error {
-	return nil
-}
-
-func (p *noopSingleSessionPacketRelay) ReceivePackets(handler network.PacketHandler) error {
-	p.handlerChan <- handler
-	<-p.closeSig
-	return nil
-}
-
-func (p *noopSingleSessionPacketRelay) Close() error {
+func (p *noopSingleSessionPacketProxy) Close() error {
 	p.closeCnt++
-	return nil
+	return p.respWriter.Close()
+}
+
+func (p *noopSingleSessionPacketProxy) WriteTo([]byte, netip.AddrPort) (int, error) {
+	return 0, nil
 }
 
 // noopLwIPUDPConn is a UDPConn that does nothing.
@@ -120,11 +111,12 @@ func (*noopLwIPUDPConn) WriteFrom(data []byte, addr *net.UDPAddr) (int, error) {
 	return 0, nil
 }
 
-// errPacketRelay always returns an error in NewAssociation.
-type errPacketRelay struct{}
+// noopSingleSessionPacketProxy always returns an error in NewSession.
+type errPacketProxy struct {
+}
 
-var errNewAssociation = errors.New("error in NewAssociation")
+var errNewSession = errors.New("error in NewSession")
 
-func (errPacketRelay) NewAssociation() (network.PacketSender, network.PacketReceiver, error) {
-	return nil, nil, errNewAssociation
+func (errPacketProxy) NewSession(network.PacketResponseReceiver) (network.PacketRequestSender, error) {
+	return nil, errNewSession
 }
