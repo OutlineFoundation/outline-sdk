@@ -393,17 +393,28 @@ func TestConcurrency(t *testing.T) {
 	require.NoError(t, err)
 	defer sender.Close()
 
+	// Use a number of concurrent writes large enough to exercise concurrency
+	// and trigger potential data races, but small enough to keep the test fast.
+	const concurrentWrites = 50
+
 	var wg sync.WaitGroup
-	for i := 0; i < 50; i++ {
+	errCh := make(chan error, concurrentWrites)
+	for i := 0; i < concurrentWrites; i++ {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
 			_, err := sender.WriteTo([]byte("data"), netip.MustParseAddrPort("127.0.0.1:1234"))
-			require.NoError(t, err)
+			if err != nil {
+				errCh <- err
+			}
 		}()
 	}
-
 	wg.Wait()
+	close(errCh)
+
+	for err := range errCh {
+		require.NoError(t, err)
+	}
 
 	// Verify ListenPacket called EXACTLY ONCE
 	require.Equal(t, 1, mockListener.getListenCount())
