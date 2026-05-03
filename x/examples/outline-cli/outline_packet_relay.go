@@ -1,4 +1,4 @@
-// Copyright 2023 The Outline Authors
+// Copyright 2026 The Outline Authors
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -17,42 +17,53 @@ package main
 import (
 	"context"
 	"fmt"
+	"time"
 
 	"golang.getoutline.org/sdk/dns"
-	"golang.getoutline.org/sdk/network"
 	"golang.getoutline.org/sdk/network/dnstruncate"
+	"golang.getoutline.org/sdk/network/packetrelay"
 	"golang.getoutline.org/sdk/transport"
 	"golang.getoutline.org/sdk/x/configurl"
 	"golang.getoutline.org/sdk/x/connectivity"
 )
 
-type outlinePacketProxy struct {
-	network.DelegatePacketProxy
+type outlinePacketRelay struct {
+	packetrelay.DelegatePacketRelay
 
-	remote, fallback network.PacketProxy
+	remote, fallback packetrelay.PacketRelay
 	remotePl         transport.PacketListener
 }
 
-func newOutlinePacketProxy(transportConfig string) (opp *outlinePacketProxy, err error) {
-	opp = &outlinePacketProxy{}
+func newOutlinePacketRelay(transportConfig string) (opp *outlinePacketRelay, err error) {
+	opp = &outlinePacketRelay{}
 
 	if opp.remotePl, err = configurl.NewDefaultProviders().NewPacketListener(context.TODO(), transportConfig); err != nil {
 		return nil, fmt.Errorf("failed to create UDP packet listener: %w", err)
 	}
-	if opp.remote, err = network.NewPacketProxyFromPacketListener(opp.remotePl); err != nil {
-		return nil, fmt.Errorf("failed to create UDP packet proxy: %w", err)
+	
+	// Create the underlying base relay
+	baseRemote, err := packetrelay.NewPacketRelayFromPacketListener(opp.remotePl)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create UDP packet relay: %w", err)
 	}
-	if opp.fallback, err = dnstruncate.NewPacketProxy(); err != nil {
-		return nil, fmt.Errorf("failed to create DNS truncate packet proxy: %w", err)
+	
+	// Layer the 30s timeout explicitly
+	opp.remote, err = packetrelay.NewTimeoutPacketRelay(baseRemote, 30*time.Second)
+	if err != nil {
+		return nil, fmt.Errorf("failed to layer timeout on remote UDP relay: %w", err)
 	}
-	if opp.DelegatePacketProxy, err = network.NewDelegatePacketProxy(opp.fallback); err != nil {
-		return nil, fmt.Errorf("failed to create delegate UDP proxy: %w", err)
+
+	if opp.fallback, err = dnstruncate.NewPacketRelay(); err != nil {
+		return nil, fmt.Errorf("failed to create DNS truncate packet relay: %w", err)
+	}
+	if opp.DelegatePacketRelay, err = packetrelay.NewDelegatePacketRelay(opp.fallback); err != nil {
+		return nil, fmt.Errorf("failed to create delegate UDP relay: %w", err)
 	}
 
 	return
 }
 
-func (proxy *outlinePacketProxy) testConnectivityAndRefresh(resolverAddr, domain string) error {
+func (proxy *outlinePacketRelay) testConnectivityAndRefresh(resolverAddr, domain string) error {
 	dialer := transport.PacketListenerDialer{Listener: proxy.remotePl}
 	dnsResolver := dns.NewUDPResolver(dialer, resolverAddr)
 	result, err := connectivity.TestConnectivityWithResolver(context.Background(), dnsResolver, domain)
@@ -62,9 +73,9 @@ func (proxy *outlinePacketProxy) testConnectivityAndRefresh(resolverAddr, domain
 	}
 	if result != nil {
 		logging.Info.Println("remote server cannot handle UDP traffic, switch to DNS truncate mode.")
-		return proxy.SetProxy(proxy.fallback)
+		return proxy.SetRelay(proxy.fallback)
 	} else {
 		logging.Info.Println("remote server supports UDP, we will delegate all UDP packets to it")
-		return proxy.SetProxy(proxy.remote)
+		return proxy.SetRelay(proxy.remote)
 	}
 }
