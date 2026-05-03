@@ -87,9 +87,10 @@ func (s *timeoutPacketSender) SendPacket(p []byte, destination netip.AddrPort) e
 		return ErrClosed
 	}
 	s.lastActivity = time.Now()
+	inner := s.inner
 	s.mu.Unlock()
 
-	return s.inner.SendPacket(p, destination)
+	return inner.SendPacket(p, destination)
 }
 
 func (s *timeoutPacketSender) checkTimeout() {
@@ -126,6 +127,7 @@ func (s *timeoutPacketSender) Close() error {
 	s.closed = true
 	s.timer.Stop()
 	inner := s.inner
+	s.inner = nil
 	s.mu.Unlock()
 
 	return inner.Close()
