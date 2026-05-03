@@ -138,3 +138,5 @@ require (
 )
 
 tool honnef.co/go/tools/cmd/staticcheck
+
+replace golang.getoutline.org/sdk => ../

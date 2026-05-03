@@ -36,7 +36,7 @@ const (
 type OutlineDevice struct {
 	network.IPDevice
 	sd    transport.StreamDialer
-	pp    *outlinePacketProxy
+	pp    *outlinePacketRelay
 	svrIP net.IP
 }
 
@@ -54,10 +54,10 @@ func NewOutlineDevice(transportConfig string) (od *OutlineDevice, err error) {
 	if od.sd, err = configModule.NewStreamDialer(context.TODO(), transportConfig); err != nil {
 		return nil, fmt.Errorf("failed to create TCP dialer: %w", err)
 	}
-	if od.pp, err = newOutlinePacketProxy(transportConfig); err != nil {
+	if od.pp, err = newOutlinePacketRelay(transportConfig); err != nil {
 		return nil, fmt.Errorf("failed to create delegate UDP proxy: %w", err)
 	}
-	if od.IPDevice, err = lwip2transport.ConfigureDevice(od.sd, od.pp); err != nil {
+	if od.IPDevice, err = lwip2transport.ConfigureDeviceWithRelay(od.sd, od.pp); err != nil {
 		return nil, fmt.Errorf("failed to configure lwIP: %w", err)
 	}
 
