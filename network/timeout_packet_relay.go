@@ -61,6 +61,9 @@ func (r *TimeoutPacketRelay) NewAssociation() (PacketSender, PacketReceiver, err
 		lastActivity: time.Now(),
 	}
 
+	// Lock before starting AfterFunc because the checkTimeout callback
+	// accesses tSender.timer (via s.timer.Reset), and could theoretically
+	// execute before the assignment below completes.
 	tSender.mu.Lock()
 	tSender.timer = time.AfterFunc(r.timeout, tSender.checkTimeout)
 	tSender.mu.Unlock()
