@@ -21,6 +21,7 @@ import (
 	"sync"
 
 	"golang.getoutline.org/sdk/network"
+	"golang.getoutline.org/sdk/network/packetrelay"
 )
 
 // From [RFC 1035], the DNS message header contains the following fields:
@@ -83,17 +84,17 @@ type dnsTruncateReceiver struct {
 }
 
 // Compilation guard against interface implementation
-var _ network.PacketRelay = (*dnsTruncateProxy)(nil)
-var _ network.PacketSender = (*dnsTruncateSender)(nil)
-var _ network.PacketReceiver = (*dnsTruncateReceiver)(nil)
+var _ packetrelay.PacketRelay = (*dnsTruncateProxy)(nil)
+var _ packetrelay.PacketSender = (*dnsTruncateSender)(nil)
+var _ packetrelay.PacketReceiver = (*dnsTruncateReceiver)(nil)
 
-// NewPacketRelay creates a new [network.PacketRelay] that can be used to handle DNS requests if the remote proxy
+// NewPacketRelay creates a new [packetrelay.PacketRelay] that can be used to handle DNS requests if the remote proxy
 // doesn't support UDP traffic. It sets the TC (truncated) bit in the DNS response header to tell the caller to resend
 // the DNS request over TCP.
 //
-// This [network.PacketRelay] should only be used if the remote proxy server doesn't support UDP traffic at all. Note
-// that all other non-DNS UDP packets will be dropped by this [network.PacketRelay].
-func NewPacketRelay() (network.PacketRelay, error) {
+// This [packetrelay.PacketRelay] should only be used if the remote proxy server doesn't support UDP traffic at all. Note
+// that all other non-DNS UDP packets will be dropped by this [packetrelay.PacketRelay].
+func NewPacketRelay() (packetrelay.PacketRelay, error) {
 	return &dnsTruncateProxy{}, nil
 }
 
@@ -110,9 +111,9 @@ func NewPacketProxy() (network.PacketProxy, error) {
 	return network.NewPacketProxyFromPacketRelay(relay), nil
 }
 
-// NewAssociation implements [network.PacketRelay].NewAssociation(). It creates a new [network.PacketSender] and
-// [network.PacketReceiver] that will set the TC (truncated) bit on incoming DNS requests and yield the response.
-func (p *dnsTruncateProxy) NewAssociation() (network.PacketSender, network.PacketReceiver, error) {
+// NewAssociation implements [packetrelay.PacketRelay].NewAssociation(). It creates a new [packetrelay.PacketSender] and
+// [packetrelay.PacketReceiver] that will set the TC (truncated) bit on incoming DNS requests and yield the response.
+func (p *dnsTruncateProxy) NewAssociation() (packetrelay.PacketSender, packetrelay.PacketReceiver, error) {
 	// Buffer size of 16 is a reasonable trade-off for local DNS truncation
 	ch := make(chan dnsPacket, 16)
 	sender := &dnsTruncateSender{
@@ -124,27 +125,27 @@ func (p *dnsTruncateProxy) NewAssociation() (network.PacketSender, network.Packe
 	return sender, receiver, nil
 }
 
-// Close implements [network.PacketSender].Close(), and it closes the corresponding
-// [network.PacketReceiver] channel.
+// Close implements [packetrelay.PacketSender].Close(), and it closes the corresponding
+// [packetrelay.PacketReceiver] channel.
 func (s *dnsTruncateSender) Close() error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.closed {
-		return network.ErrClosed
+		return packetrelay.ErrClosed
 	}
 	s.closed = true
 	close(s.ch)
 	return nil
 }
 
-// SendPacket implements [network.PacketSender].SendPacket(). It parses a packet from p, and determines whether it is
+// SendPacket implements [packetrelay.PacketSender].SendPacket(). It parses a packet from p, and determines whether it is
 // a valid DNS request. If so, it will push a DNS response with TC (truncated) bit set to the receiver.
 func (s *dnsTruncateSender) SendPacket(p []byte, destination netip.AddrPort) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
 	if s.closed {
-		return network.ErrClosed
+		return packetrelay.ErrClosed
 	}
 
 	if destination.Port() != standardDNSPort {
@@ -176,9 +177,9 @@ func (s *dnsTruncateSender) SendPacket(p []byte, destination netip.AddrPort) err
 	}
 }
 
-// ReceivePackets implements [network.PacketReceiver].ReceivePackets. It blocks and passes incoming DNS responses
+// ReceivePackets implements [packetrelay.PacketReceiver].ReceivePackets. It blocks and passes incoming DNS responses
 // to the handler.
-func (r *dnsTruncateReceiver) ReceivePackets(handler network.PacketHandler) error {
+func (r *dnsTruncateReceiver) ReceivePackets(handler packetrelay.PacketHandler) error {
 	for pkt := range r.ch {
 		if err := handler.HandlePacket(pkt.payload, pkt.source); err != nil {
 			return err

@@ -18,6 +18,7 @@ import (
 	"errors"
 	"time"
 
+	"golang.getoutline.org/sdk/network/packetrelay"
 	"golang.getoutline.org/sdk/transport"
 )
 
@@ -27,20 +28,20 @@ var _ PacketProxy = (*PacketListenerProxy)(nil)
 // PacketListenerProxy creates a new [PacketProxy] that uses the existing [transport.PacketListener] to
 // create connections to a proxy.
 //
-// Deprecated: Use [PacketListenerRelay] instead.
+// Deprecated: Use [packetrelay.PacketListenerRelay] instead.
 type PacketListenerProxy struct {
-	relay            PacketRelay
-	baseRelay        *PacketListenerRelay
+	relay            packetrelay.PacketRelay
+	baseRelay        *packetrelay.PacketListenerRelay
 	writeIdleTimeout time.Duration
 }
 
 // NewPacketProxyFromPacketListener creates a new [PacketProxy] that uses the existing [transport.PacketListener] to
 // create connections to a proxy. You can also specify additional options.
 //
-// Deprecated: Use [NewPacketRelayFromPacketListener] instead.
+// Deprecated: Use [packetrelay.NewPacketRelayFromPacketListener] instead.
 func NewPacketProxyFromPacketListener(pl transport.PacketListener, options ...func(*PacketListenerProxy) error) (*PacketListenerProxy, error) {
 	// Create the underlying base relay
-	baseRelay, err := NewPacketRelayFromPacketListener(pl)
+	baseRelay, err := packetrelay.NewPacketRelayFromPacketListener(pl)
 	if err != nil {
 		return nil, err
 	}
@@ -58,7 +59,7 @@ func NewPacketProxyFromPacketListener(pl transport.PacketListener, options ...fu
 	}
 
 	// Build the final relay chain: TimeoutPacketRelay(PacketListenerRelay)
-	timeoutRelay, err := NewTimeoutPacketRelay(p.baseRelay, p.writeIdleTimeout)
+	timeoutRelay, err := packetrelay.NewTimeoutPacketRelay(p.baseRelay, p.writeIdleTimeout)
 	if err != nil {
 		return nil, err
 	}
@@ -71,7 +72,7 @@ func NewPacketProxyFromPacketListener(pl transport.PacketListener, options ...fu
 // This means that if there are no WriteTo operations on the UDP session created by NewSession for the specified amount
 // of time, the proxy will end this session.
 //
-// Deprecated: Use [NewTimeoutPacketRelay] to decorate the underlying [PacketRelay] instead.
+// Deprecated: Use [packetrelay.NewTimeoutPacketRelay] to decorate the underlying [packetrelay.PacketRelay] instead.
 func WithPacketListenerWriteIdleTimeout(timeout time.Duration) func(*PacketListenerProxy) error {
 	return func(p *PacketListenerProxy) error {
 		if timeout <= 0 {

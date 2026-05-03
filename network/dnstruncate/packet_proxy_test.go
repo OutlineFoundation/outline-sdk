@@ -23,6 +23,7 @@ import (
 	"time"
 
 	"golang.getoutline.org/sdk/network"
+	"golang.getoutline.org/sdk/network/packetrelay"
 	"github.com/google/gopacket"
 	"github.com/google/gopacket/layers"
 	"github.com/stretchr/testify/require"
@@ -98,7 +99,7 @@ func TestWriteToClosedProxyReturnsError(t *testing.T) {
 	require.NoError(t, session.Close())
 	dnsReq := constructDNSRequestOrResponse(t, false, 0x4567, []string{"www.google.com"})
 	resp, err := session.Query(dnsReq, resolverAddr)
-	require.ErrorIs(t, err, network.ErrClosed)
+	require.ErrorIs(t, err, packetrelay.ErrClosed)
 	require.Nil(t, resp)
 	session.AssertNoResponseFrom(resolverAddr)
 }
@@ -145,7 +146,7 @@ func TestMultipleWriteToRaceCondition(t *testing.T) {
 
 /********** Test utilities **********/
 
-func createProxyForTest(t *testing.T) network.PacketRelay {
+func createProxyForTest(t *testing.T) packetrelay.PacketRelay {
 	p, err := NewPacketRelay()
 	require.NoError(t, err)
 	require.NotNil(t, p)
@@ -218,8 +219,8 @@ type dnsResponseState struct {
 // instantPacketSession sends UDP request, and return the response instantly (see Query).
 type instantPacketSession struct {
 	t         *testing.T
-	sender    network.PacketSender
-	receiver  network.PacketReceiver
+	sender    packetrelay.PacketSender
+	receiver  packetrelay.PacketReceiver
 	responses sync.Map // server addr (string) -> *dnsResponseState
 	closed    bool
 	mu        sync.Mutex

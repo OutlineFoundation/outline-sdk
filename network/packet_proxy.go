@@ -18,6 +18,8 @@ import (
 	"errors"
 	"net"
 	"net/netip"
+
+	"golang.getoutline.org/sdk/network/packetrelay"
 )
 
 // PacketProxy handles UDP traffic from the upstream network stack. The upstream network stack uses the NewSession
@@ -59,11 +61,11 @@ type PacketResponseReceiver interface {
 	Close() error
 }
 
-// NewPacketProxyFromPacketRelay adapts a [PacketRelay] to the [PacketProxy] interface.
+// NewPacketProxyFromPacketRelay adapts a [packetrelay.PacketRelay] to the [PacketProxy] interface.
 // This allows using new PacketRelay implementations where the old PacketProxy API is required.
 //
-// Deprecated: Use the new [PacketRelay] API directly.
-func NewPacketProxyFromPacketRelay(relay PacketRelay) PacketProxy {
+// Deprecated: Use the new [packetrelay] API directly.
+func NewPacketProxyFromPacketRelay(relay packetrelay.PacketRelay) PacketProxy {
 	if relay == nil {
 		return nil
 	}
@@ -71,7 +73,7 @@ func NewPacketProxyFromPacketRelay(relay PacketRelay) PacketProxy {
 }
 
 type packetRelayToProxyAdapter struct {
-	relay PacketRelay
+	relay packetrelay.PacketRelay
 }
 
 func (a *packetRelayToProxyAdapter) NewSession(respReceiver PacketResponseReceiver) (PacketRequestSender, error) {
@@ -105,17 +107,24 @@ func (h *packetHandlerAdapter) HandlePacket(p []byte, source netip.AddrPort) err
 }
 
 type packetSenderToRequestSenderAdapter struct {
-	sender PacketSender
+	sender packetrelay.PacketSender
 }
 
 func (s *packetSenderToRequestSenderAdapter) WriteTo(p []byte, destination netip.AddrPort) (int, error) {
 	err := s.sender.SendPacket(p, destination)
 	if err != nil {
+		if errors.Is(err, packetrelay.ErrClosed) {
+			return 0, ErrClosed
+		}
 		return 0, err
 	}
 	return len(p), nil
 }
 
 func (s *packetSenderToRequestSenderAdapter) Close() error {
-	return s.sender.Close()
+	err := s.sender.Close()
+	if errors.Is(err, packetrelay.ErrClosed) {
+		return ErrClosed
+	}
+	return err
 }

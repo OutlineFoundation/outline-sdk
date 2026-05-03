@@ -12,10 +12,17 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package network
+package packetrelay
 
 import (
+	"errors"
 	"net/netip"
+)
+
+var (
+	// ErrClosed is the error returned by an I/O call on a packet relay, sender, or receiver
+	// that has already been closed.
+	ErrClosed = errors.New("packet relay already closed")
 )
 
 // PacketRelay establishes packet associations to forward UDP traffic.
@@ -59,6 +66,7 @@ type PacketReceiver interface {
 	// Implementations MUST ensure that calling Close on the associated PacketSender
 	// causes ReceivePackets to return.
 	//
+	// Before returning, ReceivePackets MUST call handler.Close() to indicate the end of the stream.
 	ReceivePackets(handler PacketHandler) error
 }
 
