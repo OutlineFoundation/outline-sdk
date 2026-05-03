@@ -20,6 +20,7 @@ import (
 	"sync"
 
 	"golang.getoutline.org/sdk/network"
+	"golang.getoutline.org/sdk/network/packetrelay"
 	"golang.getoutline.org/sdk/transport"
 	lwip "github.com/eycorsican/go-tun2socks/core"
 )
@@ -31,7 +32,7 @@ var _ network.IPDevice = (*lwIPDevice)(nil)
 
 type lwIPDevice struct {
 	tcp   *tcpHandler
-	udp   *udpHandler
+	udp   lwip.UDPConnHandler
 	stack lwip.LWIPStack
 
 	// whether the device has been closed
@@ -80,6 +81,36 @@ func ConfigureDevice(sd transport.StreamDialer, pp network.PacketProxy) (network
 	inst = &lwIPDevice{
 		tcp:   newTCPHandler(sd),
 		udp:   newUDPHandler(pp),
+		stack: lwip.NewLWIPStack(),
+		done:  make(chan struct{}),
+		rdBuf: make(chan []byte),
+		rdN:   make(chan int),
+	}
+	lwip.RegisterTCPConnHandler(inst.tcp)
+	lwip.RegisterUDPConnHandler(inst.udp)
+	lwip.RegisterOutputFn(inst.forwardOutgoingIPPacket)
+
+	return inst, nil
+}
+
+// ConfigureDeviceWithRelay configures the singleton LwIP device using the [transport.StreamDialer] to handle TCP streams and
+// the [packetrelay.PacketRelay] to handle UDP packets.
+//
+// This is the modernized equivalent of [ConfigureDevice], allowing native adoption of the flow-based PacketRelay API.
+func ConfigureDeviceWithRelay(sd transport.StreamDialer, pr packetrelay.PacketRelay) (network.IPDevice, error) {
+	if sd == nil || pr == nil {
+		return nil, errors.New("both sd and pr are required")
+	}
+
+	instMu.Lock()
+	defer instMu.Unlock()
+
+	if inst != nil {
+		inst.Close()
+	}
+	inst = &lwIPDevice{
+		tcp:   newTCPHandler(sd),
+		udp:   newUDPRelayHandler(pr),
 		stack: lwip.NewLWIPStack(),
 		done:  make(chan struct{}),
 		rdBuf: make(chan []byte),
