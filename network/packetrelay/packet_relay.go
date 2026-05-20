@@ -65,8 +65,6 @@ type PacketReceiver interface {
 	//
 	// Implementations MUST ensure that calling Close on the associated PacketSender
 	// causes ReceivePackets to return.
-	//
-	// Before returning, ReceivePackets MUST call handler.Close() to indicate the end of the stream.
 	ReceivePackets(handler PacketHandler) error
 }
 

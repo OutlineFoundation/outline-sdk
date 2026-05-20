@@ -138,6 +138,11 @@ func (s *dnsTruncateSender) Close() error {
 	return nil
 }
 
+var (
+	// ErrQueueFull is returned by SendPacket when the local DNS truncation queue is full.
+	ErrQueueFull = errors.New("DNS truncation queue full")
+)
+
 // SendPacket implements [packetrelay.PacketSender].SendPacket(). It parses a packet from p, and determines whether it is
 // a valid DNS request. If so, it will push a DNS response with TC (truncated) bit set to the receiver.
 func (s *dnsTruncateSender) SendPacket(p []byte, destination netip.AddrPort) error {
@@ -173,7 +178,7 @@ func (s *dnsTruncateSender) SendPacket(p []byte, destination netip.AddrPort) err
 		return nil
 	default:
 		// Queue is full!
-		return errors.New("DNS truncation queue full")
+		return ErrQueueFull
 	}
 }
 

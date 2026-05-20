@@ -23,21 +23,24 @@ import (
 	lwip "github.com/eycorsican/go-tun2socks/core"
 )
 
-// Compilation guard against interface implementation
-var _ lwip.UDPConnHandler = (*udpRelayHandler)(nil)
-var _ packetrelay.PacketHandler = (*udpRelayPacketForwarder)(nil)
-
 type udpRelayHandler struct {
 	mu      sync.Mutex
 	relay   packetrelay.PacketRelay
 	senders map[string]packetrelay.PacketSender
+	// pending tracks active, in-flight association creations for local addresses.
+	// This allows multiple goroutines to wait on a single NewAssociation call,
+	// preventing duplicate connections when concurrent packets arrive on a new port.
+	pending map[string]chan struct{}
 }
+
+var _ lwip.UDPConnHandler = (*udpRelayHandler)(nil)
 
 // newUDPRelayHandler returns a lwIP UDP connection handler natively integrated with PacketRelay.
 func newUDPRelayHandler(pr packetrelay.PacketRelay) *udpRelayHandler {
 	return &udpRelayHandler{
 		relay:   pr,
 		senders: make(map[string]packetrelay.PacketSender, 8),
+		pending: make(map[string]chan struct{}, 8),
 	}
 }
 
@@ -49,26 +52,49 @@ func (h *udpRelayHandler) Connect(tunConn lwip.UDPConn, _ *net.UDPAddr) error {
 func (h *udpRelayHandler) ReceiveTo(tunConn lwip.UDPConn, data []byte, destAddr *net.UDPAddr) error {
 	laddr := tunConn.LocalAddr().String()
 
-	h.mu.Lock()
-	sender, ok := h.senders[laddr]
-	if !ok {
-		// Synchronize new session creation completely under the lock to prevent proxy resource leaks 
-		// when concurrent packets arrive on a new local port.
-		var err error
-		sender, err = h.newSession(tunConn)
-		if err != nil {
+	for {
+		h.mu.Lock()
+		// Fast path: association already exists, send the packet immediately.
+		if sender, ok := h.senders[laddr]; ok {
 			h.mu.Unlock()
+			return sender.SendPacket(data, destAddr.AddrPort())
+		}
+
+		// If another goroutine is already establishing an association for this local address,
+		// unlock and wait on the pending channel to avoid duplicate session creations.
+		if waitCh, ok := h.pending[laddr]; ok {
+			h.mu.Unlock()
+			<-waitCh // Block until the association creation completes
+			continue // Retry the lookup
+		}
+
+		// We are the first goroutine to encounter this local address. Register a pending
+		// channel so subsequent concurrent packets on this address will wait for us.
+		waitCh := make(chan struct{})
+		h.pending[laddr] = waitCh
+		h.mu.Unlock()
+
+		// Call newSession (which performs I/O-bound NewAssociation) outside the lock.
+		// This prevents blocking active, unrelated UDP flows on other ports.
+		sender, err := h.newSession(tunConn)
+
+		h.mu.Lock()
+		delete(h.pending, laddr)
+		if err == nil {
+			h.senders[laddr] = sender
+		}
+		close(waitCh) // Unblock any waiting goroutines
+		h.mu.Unlock()
+
+		if err != nil {
 			return err
 		}
-		h.senders[laddr] = sender
+		return sender.SendPacket(data, destAddr.AddrPort())
 	}
-	h.mu.Unlock()
-
-	return sender.SendPacket(data, destAddr.AddrPort())
 }
 
 // newSession establishes a new packet relay association for the given UDP connection
-// and spawns the background blocking receive loop. The caller must hold h.mu.
+// and spawns the background blocking receive loop.
 func (h *udpRelayHandler) newSession(conn lwip.UDPConn) (packetrelay.PacketSender, error) {
 	sender, receiver, err := h.relay.NewAssociation()
 	if err != nil {
@@ -107,6 +133,8 @@ type udpRelayPacketForwarder struct {
 	conn lwip.UDPConn
 	h    *udpRelayHandler
 }
+
+var _ packetrelay.PacketHandler = (*udpRelayPacketForwarder)(nil)
 
 // HandlePacket relays standard response packets from the proxy back to the lwIP TUN device.
 // This avoids dynamic string-parsing overhead by using allocation-free standard Go type conversions.

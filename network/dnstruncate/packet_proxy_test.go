@@ -144,6 +144,31 @@ func TestMultipleWriteToRaceCondition(t *testing.T) {
 	require.NoError(t, session.Close())
 }
 
+// Make sure SendPacket returns ErrQueueFull when the internal queue is full
+func TestSendPacketQueueFull(t *testing.T) {
+	p := createProxyForTest(t)
+	sender, receiver, err := p.NewAssociation()
+	require.NoError(t, err)
+	require.NotNil(t, sender)
+	require.NotNil(t, receiver)
+
+	resolverAddr := netip.MustParseAddrPort("1.2.3.4:53")
+	dnsReq := constructDNSRequestOrResponse(t, false, 0x1234, []string{"www.google.com"})
+
+	// Send 16 packets to fill the bounded queue (size 16)
+	for i := 0; i < 16; i++ {
+		err := sender.SendPacket(dnsReq, resolverAddr)
+		require.NoError(t, err)
+	}
+
+	// Send the 17th packet, which must fail with ErrQueueFull
+	err = sender.SendPacket(dnsReq, resolverAddr)
+	require.ErrorIs(t, err, ErrQueueFull)
+
+	require.NoError(t, sender.Close())
+}
+
+
 /********** Test utilities **********/
 
 func createProxyForTest(t *testing.T) packetrelay.PacketRelay {
