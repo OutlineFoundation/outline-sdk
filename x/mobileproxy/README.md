@@ -39,10 +39,6 @@ From the `x/` directory:
 go build -o "$(pwd)/out/" golang.org/x/mobile/cmd/gomobile golang.org/x/mobile/cmd/gobind
 ```
 
-> [!WARNING]
-> The Psiphon library is not included in the build by default because the Psiphon codebase uses GPL. To support Psiphon configuration in the Mobile Proxy please build using the [`psiphon` build tag](https://pkg.go.dev/golang.getoutline.org/sdk/x/psiphon).
-> When integrating Psiphon into your application please work with the Psiphon team at sponsor@psiphon.ca
-
 Then build the iOS and Android libraries with [`gomobile bind`](https://pkg.go.dev/golang.org/x/mobile/cmd/gomobile#hdr-Build_a_library_for_Android_and_iOS)
 
 ```bash
@@ -50,11 +46,32 @@ PATH="$(pwd)/out:$PATH" gomobile bind -ldflags='-s -w' -target=ios -iosversion=1
 PATH="$(pwd)/out:$PATH" gomobile bind -ldflags='-s -w' -target=android -androidapi=21 -o "$(pwd)/out/mobileproxy.aar" golang.getoutline.org/sdk/x/mobileproxy
 ```
 
-To include Psiphon support please also include the `-tags=psiphon` flag and the psiphon library.
+Note: Gomobile expects gobind to be in the PATH, that's why we need to prebuild it, and set up the PATH accordingly.
+
+The `-ldflags='-s -w'` flag strips debug symbols to reduce the size of the output library.
+
+See [our Github Test Action](https://github.com/OutlineFoundation/outline-sdk/blob/main/.github/workflows/test.yml) for how we build the Mobileproxy in our tests.
+
+
+### Adding third-party support
+
+It's possible to include support for transports from third-party providers. Two such provicers are Amnezia and Psiphon.
+
+To add **AmneziaWG support**, include the `github.com/amnezia-vpn/amneziawg-go/outline` package:
+
+```sh
+PATH="$(pwd)/out:$PATH" gomobile bind -ldflags='-s -w' -target=ios -iosversion=11.0 -o "$(pwd)/out/mobileproxy.xcframework" golang.getoutline.org/sdk/x/mobileproxy github.com/amnezia-vpn/amneziawg-go/outline
+PATH="$(pwd)/out:$PATH" gomobile bind -ldflags='-s -w' -target=android -androidapi=21 -o "$(pwd)/out/mobileproxy.aar" golang.getoutline.org/sdk/x/mobileproxy github.com/amnezia-vpn/amneziawg-go/outline
+```
+
+Then call their [outline.RegisterFallbackParser](https://pkg.go.dev/github.com/amnezia-vpn/amneziawg-go/outline#RegisterFallbackParser) from your mobile code where you configure the `SmartDialerOptions`.
+
+To add **Psiphon support**, include `golang.getoutline.org/sdk/x/mobileproxy/psiphon`. You will also need to add `-tags psiphon,PSIPHON_DISABLE_INPROXY` to the build flags, and downgrade Go to 1.24:
 
 ```bash
-PATH="$(pwd)/out:$PATH" gomobile bind -ldflags='-s -w' -target=ios -iosversion=11.0 -tags=psiphon -o "$(pwd)/out/mobileproxy.xcframework" golang.getoutline.org/sdk/x/mobileproxy golang.getoutline.org/sdk/x/mobileproxy/psiphon
-PATH="$(pwd)/out:$PATH" gomobile bind -ldflags='-s -w' -target=android -androidapi=21 -tags=psiphon -o "$(pwd)/out/mobileproxy.aar" golang.getoutline.org/sdk/x/mobileproxy golang.getoutline.org/sdk/x/mobileproxy/psiphon
+export GOTOOLCHAIN=go1.24.13
+PATH="$(pwd)/out:$PATH" gomobile bind -ldflags='-s -w' -target=ios -iosversion=11.0 -tags=psiphon,PSIPHON_DISABLE_INPROXY -o "$(pwd)/out/mobileproxy.xcframework" golang.getoutline.org/sdk/x/mobileproxy golang.getoutline.org/sdk/x/mobileproxy/psiphon
+PATH="$(pwd)/out:$PATH" gomobile bind -ldflags='-s -w' -target=android -androidapi=21 -tags=psiphon,PSIPHON_DISABLE_INPROXY -o "$(pwd)/out/mobileproxy.aar" golang.getoutline.org/sdk/x/mobileproxy golang.getoutline.org/sdk/x/mobileproxy/psiphon
 ```
 
 Then, in your native code, register Psiphon with your Smart Dialer options.
@@ -127,11 +144,10 @@ do {
 }
 ```
 
-Note: Gomobile expects gobind to be in the PATH, that's why we need to prebuild it, and set up the PATH accordingly.
+> [!WARNING]
+> The Psiphon library is not included in the build by default because the Psiphon codebase uses GPL. To support Psiphon configuration in the Mobile Proxy please build using the [`psiphon` build tag](https://pkg.go.dev/golang.getoutline.org/sdk/x/psiphon).
+> When integrating Psiphon into your application please work with the Psiphon team at sponsor@psiphon.ca.
 
-The `-ldflags='-s -w'` flag strips debug symbols to reduce the size of the output library.
-
-See [our Github Test Action](https://github.com/OutlineFoundation/outline-sdk/blob/main/.github/workflows/test.yml) for how we build the Mobileproxy in our tests.
 
 <details>
 <summary>Sample iOS generated Code</summary>
