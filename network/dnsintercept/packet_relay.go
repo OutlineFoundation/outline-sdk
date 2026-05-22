@@ -18,6 +18,7 @@ import (
 	"errors"
 	"net/netip"
 	"sync"
+	"sync/atomic"
 
 	"golang.getoutline.org/sdk/network/packetrelay"
 )
@@ -132,6 +133,7 @@ func (a *interceptAssoc) Close() error {
 func (a *interceptAssoc) closeLocked() {
 	a.isClosed = true
 	close(a.closeChan)
+	a.cond.Broadcast()
 	if a.defSender != nil {
 		a.defSender.Close()
 	}
@@ -200,17 +202,16 @@ func (a *interceptAssoc) runDNSReceiver(sender packetrelay.PacketSender, receive
 type singlePacketHandler struct {
 	assoc   *interceptAssoc
 	sender  packetrelay.PacketSender
-	handled bool
+	handled atomic.Bool
 }
 
 // HandlePacket processes the incoming DNS response.
 // It guarantees that only the very first packet is forwarded, ignoring any subsequent packets.
 // It rewrites the source address and then explicitly closes the sender to tear down the short-lived sub-association.
 func (h *singlePacketHandler) HandlePacket(p []byte, source netip.AddrPort) error {
-	if h.handled {
+	if !h.handled.CompareAndSwap(false, true) {
 		return nil // Ignore subsequent packets
 	}
-	h.handled = true
 
 	select {
 	case <-h.assoc.handlerReady:
