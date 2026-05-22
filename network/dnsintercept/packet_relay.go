@@ -82,9 +82,10 @@ type interceptAssoc struct {
 	isClosed    bool
 	activeCount int
 
-	defState   int
-	defSender  packetrelay.PacketSender
-	defInitErr error
+	defState        int
+	defSender       packetrelay.PacketSender
+	defInitErr      error
+	defReceiverChan chan packetrelay.PacketReceiver
 
 	dnsSenders map[packetrelay.PacketSender]struct{}
 
@@ -99,10 +100,11 @@ type interceptAssoc struct {
 // Sub-associations are not created immediately; they are established lazily upon sending packets.
 func (r *InterceptDNSPacketRelay) NewAssociation() (packetrelay.PacketSender, packetrelay.PacketReceiver, error) {
 	a := &interceptAssoc{
-		relay:        r,
-		dnsSenders:   make(map[packetrelay.PacketSender]struct{}),
-		closeChan:    make(chan struct{}),
-		handlerReady: make(chan struct{}),
+		relay:           r,
+		dnsSenders:      make(map[packetrelay.PacketSender]struct{}),
+		closeChan:       make(chan struct{}),
+		handlerReady:    make(chan struct{}),
+		defReceiverChan: make(chan packetrelay.PacketReceiver, 1),
 	}
 	a.cond = sync.NewCond(&a.mu)
 	return &interceptSender{a}, &interceptReceiver{a}, nil
@@ -265,34 +267,13 @@ func (a *interceptAssoc) getOrCreateDefaultSender() (packetrelay.PacketSender, e
 	a.defInitErr = err
 	if err == nil {
 		a.activeCount++
-		go a.runDefaultReceiver(receiver)
+		a.defReceiverChan <- receiver
 	}
 	a.cond.Broadcast()
 	return sender, err
 }
 
-func (a *interceptAssoc) runDefaultReceiver(receiver packetrelay.PacketReceiver) {
-	defer a.Release()
-	_ = receiver.ReceivePackets(&defaultHandler{assoc: a})
-}
 
-// defaultHandler passes packets received from the default sub-relay back to the parent association's handler.
-// It remains active for the entire life of the default association. The default association lives until either:
-// 1. The remote server or underlying network forcefully closes the connection.
-// 2. The parent association is explicitly closed by the caller, which cascades a close to the default association.
-// 3. The parent association automatically closes because all other active sub-associations terminated (though this typically implies the default association terminated first).
-type defaultHandler struct {
-	assoc *interceptAssoc
-}
-
-func (h *defaultHandler) HandlePacket(p []byte, source netip.AddrPort) error {
-	select {
-	case <-h.assoc.handlerReady:
-		return h.assoc.handler.HandlePacket(p, source)
-	case <-h.assoc.closeChan:
-		return packetrelay.ErrClosed
-	}
-}
 
 // interceptSender implements packetrelay.PacketSender
 type interceptSender struct {
@@ -347,7 +328,12 @@ func (r *interceptReceiver) ReceivePackets(handler packetrelay.PacketHandler) er
 	close(r.a.handlerReady)
 	r.a.mu.Unlock()
 
-	// Block until parent association is closed.
-	<-r.a.closeChan
+	select {
+	case receiver := <-r.a.defReceiverChan:
+		_ = receiver.ReceivePackets(r.a.handler)
+		r.a.Release()
+		<-r.a.closeChan // Wait for any remaining DNS queries to terminate
+	case <-r.a.closeChan:
+	}
 	return nil
 }
