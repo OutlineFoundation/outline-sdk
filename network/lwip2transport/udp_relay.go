@@ -94,7 +94,10 @@ func (h *udpRelayHandler) ReceiveTo(tunConn lwip.UDPConn, data []byte, destAddr 
 }
 
 // newSession establishes a new packet relay association for the given UDP connection
-// and spawns the background blocking receive loop.
+// and spawns the background blocking receive loop. When the loop exits (relay closed
+// or error), closeSession cleans up the sender. If lwIP subsequently delivers another
+// packet on the same local address before it processes the conn close, ReceiveTo will
+// transparently open a new session for it.
 func (h *udpRelayHandler) newSession(conn lwip.UDPConn) (packetrelay.PacketSender, error) {
 	sender, receiver, err := h.relay.NewAssociation()
 	if err != nil {
