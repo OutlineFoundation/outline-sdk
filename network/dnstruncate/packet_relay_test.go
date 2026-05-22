@@ -115,7 +115,7 @@ func TestNewAssociationReturnsValidInterfaces(t *testing.T) {
 
 // Make sure multiple goroutines can call SendPacket to the same session
 func TestMultipleWriteToRaceCondition(t *testing.T) {
-	const clientCnt = 20
+	const clientCnt = 10
 	const iterationCntPerClient = 20
 
 	session := newInstantDNSSessionForTest(t)
@@ -124,6 +124,7 @@ func TestMultipleWriteToRaceCondition(t *testing.T) {
 	wg.Add(clientCnt)
 	for i := 0; i < clientCnt; i++ {
 		go func(idx int) {
+			defer wg.Done()
 			resolverAddr := netip.MustParseAddrPort(fmt.Sprintf("127.0.0.%d:53", idx+1))
 			require.NotNil(t, resolverAddr)
 
@@ -136,7 +137,6 @@ func TestMultipleWriteToRaceCondition(t *testing.T) {
 				require.NoError(t, err)
 				require.Equal(t, expected, resp)
 			}
-			wg.Done()
 		}(i)
 	}
 

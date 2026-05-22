@@ -58,7 +58,10 @@ func (s *mockSender) SendPacket(p []byte, destination netip.AddrPort) error {
 	}
 	cpy := make([]byte, len(p))
 	copy(cpy, p)
-	s.packets <- packetData{p: cpy, dest: destination}
+	select {
+	case s.packets <- packetData{p: cpy, dest: destination}:
+	default:
+	}
 	return nil
 }
 
