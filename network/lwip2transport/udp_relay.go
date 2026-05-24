@@ -99,7 +99,7 @@ func (h *udpRelayHandler) getSender(tunConn lwip.UDPConn) (packetrelay.PacketSen
 
 		// Call newSession (which performs I/O-bound NewAssociation) outside the lock.
 		// This prevents blocking active, unrelated UDP flows on other ports.
-		sender, err := h.newSession(tunConn)
+		sender, receiver, err := h.newSession(tunConn)
 
 		h.mu.Lock()
 		delete(h.pending, laddr)
@@ -110,34 +110,32 @@ func (h *udpRelayHandler) getSender(tunConn lwip.UDPConn) (packetrelay.PacketSen
 		close(p.done) // Unblock any waiting goroutines
 		h.mu.Unlock()
 
+		if err == nil {
+			// Start the receive loop AFTER the sender is registered in h.senders, so
+			// that closeSession (triggered when the loop exits) is guaranteed to find
+			// the sender and remove it. Otherwise an immediately-failing receiver could
+			// leak a senderless entry into the map.
+			go func() {
+				forwarder := &udpRelayPacketForwarder{conn: tunConn, h: h}
+				_ = receiver.ReceivePackets(forwarder)
+				_ = h.closeSession(tunConn)
+			}()
+		}
 		return sender, err
 	}
 }
 
-// newSession establishes a new packet relay association for the given UDP connection
-// and spawns the background blocking receive loop. When the loop exits (relay closed
-// or error), closeSession cleans up the sender. If lwIP subsequently delivers another
-// packet on the same local address before it processes the conn close, ReceiveTo will
-// transparently open a new session for it.
-func (h *udpRelayHandler) newSession(conn lwip.UDPConn) (packetrelay.PacketSender, error) {
+// newSession opens a new packet relay association for conn. The caller is
+// responsible for registering the returned sender in h.senders and starting the
+// background receive loop on the returned receiver. On failure, conn is closed
+// and (nil, nil, err) is returned.
+func (h *udpRelayHandler) newSession(conn lwip.UDPConn) (packetrelay.PacketSender, packetrelay.PacketReceiver, error) {
 	sender, receiver, err := h.relay.NewAssociation()
 	if err != nil {
 		_ = conn.Close()
-		return nil, err
+		return nil, nil, err
 	}
-
-	forwarder := &udpRelayPacketForwarder{
-		conn: conn,
-		h:    h,
-	}
-
-	// Start the blocking receive loop to pull response packets using a clean Go routine
-	go func() {
-		_ = receiver.ReceivePackets(forwarder)
-		_ = h.closeSession(conn)
-	}()
-
-	return sender, nil
+	return sender, receiver, nil
 }
 
 func (h *udpRelayHandler) closeSession(conn lwip.UDPConn) error {
