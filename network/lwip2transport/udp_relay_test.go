@@ -34,20 +34,22 @@ func TestUDPRelayCloseNoDeadlock(t *testing.T) {
 
 	localAddr := net.UDPAddrFromAddrPort(netip.MustParseAddrPort("127.0.0.1:60127"))
 	destAddr := net.UDPAddrFromAddrPort(netip.MustParseAddrPort("1.2.3.4:4321"))
-	err := h.ReceiveTo(&noopLwIPUDPConn{localAddr}, []byte{}, destAddr)
-	require.NoError(t, err)
+	conn := &noopLwIPUDPConn{localAddr}
+
+	require.NoError(t, h.Connect(conn, destAddr))
+	require.NoError(t, h.ReceiveTo(conn, []byte{}, destAddr))
 
 	// Ensure the session was registered
 	h.mu.Lock()
-	require.Len(t, h.senders, 1)
+	require.Len(t, h.sessions, 1)
 	h.mu.Unlock()
 
-	// Trigger concurrent closing on the relay/sender path
+	// Trigger concurrent closing on the same session.
 	const ConcurrentCloseCount = 50
 	errChan := make(chan error, ConcurrentCloseCount)
 	for i := 0; i < ConcurrentCloseCount; i++ {
 		go func() {
-			errChan <- h.closeSession(&noopLwIPUDPConn{localAddr})
+			errChan <- h.closeSession(conn)
 		}()
 	}
 
@@ -57,19 +59,19 @@ func TestUDPRelayCloseNoDeadlock(t *testing.T) {
 			nNilErr++
 		}
 	}
-	
+
 	// At least one closeSession must succeed cleanly, and the map must be empty
 	require.GreaterOrEqual(t, nNilErr, 1)
 	h.mu.Lock()
-	require.Len(t, h.senders, 0)
+	require.Len(t, h.sessions, 0)
 	h.mu.Unlock()
 }
 
-func TestUDPRelayReceiveToNoDeadlockWhenError(t *testing.T) {
+func TestUDPRelayConnectError(t *testing.T) {
 	h := newUDPRelayHandler(errPacketRelay{})
 	localAddr := net.UDPAddrFromAddrPort(netip.MustParseAddrPort("127.0.0.1:60127"))
 	destAddr := net.UDPAddrFromAddrPort(netip.MustParseAddrPort("1.2.3.4:4321"))
-	err := h.ReceiveTo(&noopLwIPUDPConn{localAddr}, []byte{}, destAddr)
+	err := h.Connect(&noopLwIPUDPConn{localAddr}, destAddr)
 	require.ErrorIs(t, err, errNewAssociation)
 }
 
