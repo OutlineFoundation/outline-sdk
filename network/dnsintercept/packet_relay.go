@@ -75,6 +75,15 @@ const (
 // 3. When a sub-association terminates (e.g. after receiving a DNS response or when the default relay closes), the active count decrements via Release().
 // 4. If the active count drops back to 0, it automatically closes itself.
 // 5. Explicitly calling Close() on the parent association forcefully closes all active sub-associations.
+//
+// Why ref-counting rather than a fixed parent lifetime: in the common case the
+// OS uses one DNS query per ephemeral UDP source port (so a parent only ever
+// sees one short-lived DNS sub at a time, and activeCount flickers 0↔1). The
+// ref-count machinery becomes load-bearing only when that assumption is
+// violated — a caller that reuses one source port across multiple DNS queries,
+// or mixes DNS with other UDP traffic on the same port. There it keeps the
+// parent alive until every sub has finished. See doc.go for the broader
+// rationale.
 type interceptAssoc struct {
 	relay *InterceptDNSPacketRelay
 

@@ -46,6 +46,12 @@ employs distinct lifecycle strategies for its sub-associations:
     forwarded back to the caller (with its source address rewritten back to the
     `dnsLocalResolver`), this short-lived sub-association is immediately closed.
     This prevents port exhaustion and aligns with standard DNS proxy behaviors.
+    Concretely, this mirrors how the OS itself handles DNS: a typical stub
+    resolver opens a fresh ephemeral UDP source port per query and does not
+    multiplex other UDP traffic onto it. The per-query teardown keeps our
+    upstream association lifetime in step with that OS-side socket lifetime,
+    which is also why the `dnsRelay` is typically configured with a much shorter
+    idle timeout (on the order of seconds) than the `defaultRelay` (minutes).
 
   - Lazy Default Association: For all other traffic, a single long-lived association
     is lazily created on the `defaultRelay` the first time a non-DNS packet is sent.
