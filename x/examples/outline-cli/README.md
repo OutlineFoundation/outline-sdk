@@ -10,6 +10,12 @@ go run golang.getoutline.org/sdk/x/examples/outline-cli@latest -transport "ss://
 
 - `-transport` : the Outline server access key from the service provider, it should start with "ss://"
 
+If your network cannot reach `golang.getoutline.org`, prefix the command with the public Go module proxy:
+
+```
+sudo env GOPROXY=https://proxy.golang.org go run golang.getoutline.org/sdk/x/examples/outline-cli@latest -transport "ss://<outline-server-access-key>"
+```
+
 ### Build
 
 You can use the following command to build the CLI.
