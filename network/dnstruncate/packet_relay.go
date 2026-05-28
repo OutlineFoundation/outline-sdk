@@ -155,8 +155,9 @@ func (s *dnsTruncateSender) SendPacket(p []byte, destination netip.AddrPort) err
 	buf[dnsUdpAnswerByte] |= (dnsUdpResponseBit | dnsUdpTruncatedBit)
 	buf[dnsUdpRCodeByte] &= ^dnsUdpRCodeMask
 
-	// Copy QDCOUNT to ANCOUNT. This is an incorrect workaround for some DNS clients (such as Windows 7);
-	// because without these clients won't retry over TCP.
+	// Set ANCOUNT to QDCOUNT. This is technically incorrect, since the response does not
+	// include an answer. However, without it some DNS clients (i.e. Windows 7) do not retry
+	// over TCP.
 	copy(buf[dnsARCntStartByte:dnsARCntEndByte+1], buf[dnsQDCntStartByte:dnsQDCntEndByte+1])
 
 	// Push to channel inside the lock using select with default to avoid deadlocks
