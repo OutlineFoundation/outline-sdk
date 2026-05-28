@@ -1,8 +1,8 @@
 module golang.getoutline.org/sdk
 
-go 1.24.1
+go 1.25.0
 
-toolchain go1.24.6
+toolchain go1.25.5
 
 require (
 	github.com/eycorsican/go-tun2socks v1.16.11

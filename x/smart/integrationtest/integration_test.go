@@ -27,7 +27,6 @@ import (
 	"time"
 
 	"golang.getoutline.org/sdk/x/configurl"
-	"golang.getoutline.org/sdk/x/mobileproxy/psiphon"
 	"golang.getoutline.org/sdk/x/smart"
 	"github.com/stretchr/testify/require"
 )
@@ -62,14 +61,14 @@ tls:
 fallback:
     # Nonexistent Outline Server
     - ss://Y2hhY2hhMjAtaWV0Zi1wb2x5MTMwNTprSzdEdHQ0MkJLOE9hRjBKYjdpWGFK@1.2.3.4:9999/?outline=1
-    # Nonexistant Psiphon Config JSON
-    - psiphon: {
-        "PropagationChannelId":"ID1",
-        "SponsorId":"ID2",
-        "DisableLocalSocksProxy" : true,
-        "DisableLocalHTTPProxy" : true,
-        "EstablishTunnelTimeoutSeconds": 1,
-        }
+    # TODO(#513): Psiphon disabled: psiphon-tls is incompatible with Go 1.25.
+    # - psiphon: {
+    #     "PropagationChannelId":"ID1",
+    #     "SponsorId":"ID2",
+    #     "DisableLocalSocksProxy" : true,
+    #     "DisableLocalHTTPProxy" : true,
+    #     "EstablishTunnelTimeoutSeconds": 1,
+    #     }
     # Nonexistant local socks5 proxy
     - socks5://192.168.1.10:1080
 `)
@@ -96,7 +95,8 @@ fallback:
 		StreamDialer: streamDialer,
 		PacketDialer: packetDialer,
 	}
-	finder.RegisterFallbackParser("psiphon", psiphon.ParseConfig)
+	// TODO(#513): Psiphon disabled: psiphon-tls is incompatible with Go 1.25.
+	// finder.RegisterFallbackParser("psiphon", psiphon.ParseConfig)
 
 	_, err = finder.NewDialer(context.Background(), testDomains, configBytes)
 
@@ -110,7 +110,8 @@ fallback:
 		"request for A query failed: dial DNS resolver failed:",
 		`request for A query failed: receive DNS message failed: failed to get HTTP response: Post "https://mitm-software.badssl.com:443/dns-query": tls:`,
 		"🏃 running test: 'ss://Y2hhY2hhMjAtaWV0Zi1wb2x5MTMwNTprSzdEdHQ0MkJLOE9hRjBKYjdpWGFK@1.2.3.4:9999/?outline=1'",
-		"❌ Failed to create fallback[1]: [{psiphon: {DisableLocalHTTPProxy: true, DisableLocalSocksProxy: true, Establish…]: failed to start psiphon dialer: clientlib: tunnel establishment timeout",
+		// TODO(#513): Psiphon disabled: psiphon-tls is incompatible with Go 1.25.
+		// "❌ Failed to create fallback[1]: [{psiphon: {DisableLocalHTTPProxy: true, DisableLocalSocksProxy: true, Establish…]: failed to start psiphon dialer: clientlib: tunnel establishment timeout",
 		"🏃 running test: 'socks5://192.168.1.10:1080' (domain: www.example.com.)",
 	}
 	logContent := logBuffer.String()

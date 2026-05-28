@@ -1,4 +1,4 @@
-// Copyright 2024 The Outline Authors
+// Copyright 2026 The Outline Authors
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -12,10 +12,19 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//go:build psiphon
+package packetrelay
 
-package psiphon
+import (
+	"testing"
 
-// Fake variable used in the package to require the build tag, without preventing the rest of the code
-// from being processed by the Go documentation service.
-var mustSetPsiphonBuildTag = struct{}{}
+	"golang.getoutline.org/sdk/transport"
+	"github.com/stretchr/testify/require"
+)
+
+func TestNewPacketRelayFromPacketListener(t *testing.T) {
+	pl := &transport.UDPListener{}
+
+	relay, err := NewPacketRelayFromPacketListener(pl)
+	require.NoError(t, err)
+	require.NotNil(t, relay)
+}

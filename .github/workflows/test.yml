@@ -32,7 +32,9 @@ jobs:
         run: go build -v ./...
 
       - name: Build X
-        run: go build -C x -tags psiphon -o "${{ env.OUTPUT_DIR }}/" -v ./...
+        run: go build -C x -o "${{ env.OUTPUT_DIR }}/" -v ./...
+        # TODO(#513): Psiphon disabled: psiphon-tls is incompatible with Go 1.25.
+        # run: go build -C x -tags psiphon -o "${{ env.OUTPUT_DIR }}/" -v ./...
 
       - name: Build Go Mobile
         if: matrix.os == 'macos-latest' || matrix.os == 'ubuntu-latest'
@@ -41,12 +43,16 @@ jobs:
       - name: Build Mobileproxy (Android)
         if: matrix.os == 'ubuntu-latest'
         working-directory: ${{ github.workspace }}/x
-        run: PATH="${{ env.OUTPUT_DIR }}:$PATH" gomobile bind -ldflags='-s -w' -v -tags=psiphon -target=android -androidapi=21 -o "${{ env.OUTPUT_DIR }}/mobileproxy.aar" golang.getoutline.org/sdk/x/mobileproxy
+        run: PATH="${{ env.OUTPUT_DIR }}:$PATH" gomobile bind -ldflags='-s -w' -v -target=android -androidapi=21 -o "${{ env.OUTPUT_DIR }}/mobileproxy.aar" golang.getoutline.org/sdk/x/mobileproxy
+        # TODO(#513): Psiphon disabled: psiphon-tls is incompatible with Go 1.25.
+        # run: PATH="${{ env.OUTPUT_DIR }}:$PATH" gomobile bind -ldflags='-s -w' -v -tags=psiphon -target=android -androidapi=21 -o "${{ env.OUTPUT_DIR }}/mobileproxy.aar" golang.getoutline.org/sdk/x/mobileproxy golang.getoutline.org/sdk/x/mobileproxy/psiphon
 
       - name: Build Mobileproxy (iOS)
         if: matrix.os == 'macos-latest'
         working-directory: ${{ github.workspace }}/x
-        run: PATH="${{ env.OUTPUT_DIR }}:$PATH" gomobile bind -ldflags='-s -w' -v -tags=psiphon -target=ios -iosversion=11.0 -o "${{ env.OUTPUT_DIR }}/mobileproxy.xcframework" golang.getoutline.org/sdk/x/mobileproxy
+        run: PATH="${{ env.OUTPUT_DIR }}:$PATH" gomobile bind -ldflags='-s -w' -v -target=ios -iosversion=11.0 -o "${{ env.OUTPUT_DIR }}/mobileproxy.xcframework" golang.getoutline.org/sdk/x/mobileproxy
+        # TODO(#513): Psiphon disabled: psiphon-tls is incompatible with Go 1.25.
+        # run: PATH="${{ env.OUTPUT_DIR }}:$PATH" gomobile bind -ldflags='-s -w' -v -tags=psiphon -target=ios -iosversion=11.0 -o "${{ env.OUTPUT_DIR }}/mobileproxy.xcframework" golang.getoutline.org/sdk/x/mobileproxy golang.getoutline.org/sdk/x/mobileproxy/psiphon
 
       - name: Check SDK licenses
         # We allow only "notice" type of licenses.
@@ -57,7 +63,9 @@ jobs:
         run: go tool go-licenses check --ignore=golang.org/x --allowed_licenses=Apache-2.0,Apache-3,BSD-3-Clause,BSD-4-Clause,CC0-1.0,MIT ./...
 
       - name: Staticcheck x
-        run: go -C x tool staticcheck -tags psiphon ./...
+        run: go -C x tool staticcheck ./...
+        # TODO(#513): Psiphon disabled: psiphon-tls is incompatible with Go 1.25.
+        # run: go -C x tool staticcheck -tags psiphon ./...
 
       - name: Test SDK
         # Enable nettests, which executes external network requests.
@@ -65,7 +73,9 @@ jobs:
 
       - name: Test x
         # Enable nettests, which executes external network requests.
-        run: go test -C x -tags nettest,psiphon -race -bench '.' ./... -benchtime=100ms
+        run: go test -C x -tags nettest -race -bench '.' ./... -benchtime=100ms
+        # TODO(#513): Psiphon disabled: psiphon-tls is incompatible with Go 1.25.
+        # run: go test -C x -tags nettest,psiphon -race -bench '.' ./... -benchtime=100ms
 
   android-test:
     runs-on: ubuntu-latest
@@ -141,5 +151,6 @@ jobs:
             # We can't set environment variables in this script, nor refer to $ANDROID_NDK_HOME in the job.step.env block, so
             # we set it explicitly here. (#pain)
             CC="$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin/x86_64-linux-android${{ matrix.api-level }}-clang" GOOS=android GOARCH=amd64 CGO_ENABLED=1 go test -tags nettest -exec "${{ github.workspace }}/run_on_android.sh" -v ./...
-            # TODO(fortuna): Fix psiphon and support testdata.
-            CC="$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin/x86_64-linux-android${{ matrix.api-level }}-clang" GOOS=android GOARCH=amd64 CGO_ENABLED=1 go test -C x -tags nettest,psiphon -exec "${{ github.workspace }}/run_on_android.sh" -v ./...
+            CC="$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin/x86_64-linux-android${{ matrix.api-level }}-clang" GOOS=android GOARCH=amd64 CGO_ENABLED=1 go test -C x -tags nettest -exec "${{ github.workspace }}/run_on_android.sh" -v ./...
+            # TODO(#513): Psiphon disabled: psiphon-tls is incompatible with Go 1.25.
+            # CC="$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin/x86_64-linux-android${{ matrix.api-level }}-clang" GOOS=android GOARCH=amd64 CGO_ENABLED=1 go test -C x -tags nettest,psiphon -exec "${{ github.workspace }}/run_on_android.sh" -v ./...

@@ -1,3 +1,5 @@
+//go:build psiphon
+
 package psiphon
 
 import (

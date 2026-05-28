@@ -28,6 +28,8 @@ import (
 // [PacketProxy]. Existing sessions will not be affected.
 //
 // Multiple goroutines can simultaneously invoke methods on a DelegatePacketProxy.
+//
+// Deprecated: Use [packetrelay.DelegatePacketRelay] instead.
 type DelegatePacketProxy interface {
 	PacketProxy
 
@@ -50,6 +52,8 @@ type delegatePacketProxy struct {
 
 // NewDelegatePacketProxy creates a new [DelegatePacketProxy] that forwards calls to the `proxy` [PacketProxy].
 // The `proxy` must not be nil.
+//
+// Deprecated: Use [packetrelay.NewDelegatePacketRelay] instead.
 func NewDelegatePacketProxy(proxy PacketProxy) (DelegatePacketProxy, error) {
 	if proxy == nil {
 		return nil, errInvalidProxy
