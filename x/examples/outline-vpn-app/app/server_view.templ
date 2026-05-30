@@ -1,0 +1,139 @@
+package app
+
+templ serverView() {
+  <html>
+    <head>
+      <style>
+        body, main, main * {
+          all: initial;
+          font-family: system-ui;
+          box-sizing: border-box;
+        }
+        main {
+          width: 100vw;
+          min-height: 100svh;
+          display: flex;
+          flex-direction: column;
+        }
+
+        header {
+          width: 100%;
+          background-color: hsl(170, 45%, 15%);
+          padding: 1rem 0;
+          flex-shrink: 0;
+        }
+
+        h1 {
+          display: block;
+          color: white;
+          font-size: 2rem;
+          text-align: center;
+          width: 100%;
+        }
+
+        article {
+          background-color: hsl(170, 3%, 95%);
+          flex-grow: 1;
+          display: flex;
+          flex-direction: column;
+          align-items: center;
+          justify-content: center;
+        }
+
+        section {
+          width: 100%;
+          max-width: 540px;
+          padding: 1rem;
+        }
+
+        textarea {
+          background-color: hsl(170, 8%, 85%);
+          padding: 1rem;
+          width: 100%;
+          border: 2px solid hsl(170, 5%, 45%);
+          border-radius: 0.5rem;
+          min-height: 350px;
+          font-family: monospace;
+          word-wrap: break-word;
+        }
+
+        textarea:focus {
+          outline: none;
+          border-color: hsl(170, 40%, 55%);
+        }
+
+        button {
+          cursor: pointer;
+          background-color: hsl(170, 8%, 85%);
+          border-radius: 0.5rem;
+          color: hsl(170, 5%, 45%);
+          text-align: center;
+          width: 100%;
+          height: 5rem;
+          font-size: 1.5rem;
+          font-weight: bold;
+          transition-duration: 1000ms;
+          transition-property: background-color, color, border;
+          transition-timing-function: ease;
+        }
+
+        button.connected {
+          border-style: solid;
+          border-color: hsl(170, 40%, 55%);
+          background: hsl(170, 40%, 55%);
+          color: hsl(170, 8%, 85%);
+        }
+
+        h2, h3 {
+          display: block;
+        }
+
+        h2 {
+          font-weight: bold;
+        }
+
+        .info {
+          flex-grow: 1;
+        }
+
+        .caret {
+          flex-shrink: 0;
+          font-size: 1,5rem;
+          padding: 0 0.5rem;
+        }
+      </style>
+      <script src="https://unpkg.com/htmx.org@1.9.10" integrity="sha384-D1Kt99CQMDuVetoL1lrYwg5t+9QdHe7NLX/SoJYkXDFfX37iInKRy5xLSi8nO7UC" crossorigin="anonymous"></script>
+    </head>
+    <body>
+      <main>
+        <header><h1>outline</h1></header>
+        <article>
+          <section>
+            <textarea placeholder="paste your access key here">
+            </textarea>
+          </section>
+          <section>
+            @connectionButton()
+          </section>
+        </article>
+      </main>
+
+      <script type="text/javascript">
+				let conn = new WebSocket("ws://" + document.location.host + "/__reload__");  
+				conn.onclose = function (evt) {  
+					console.log("Connection Closed")  
+					setTimeout(() => location.reload(), 5000);  
+				};
+		  </script>
+
+    </body>
+  </html>
+}
+
+templ connectionButton() {
+  <button id="connection-button" hx-get="/connection" hx-swap="outerHTML">connect</button>
+}
+
+templ disconnectionButton() {
+  <button id="connection-button" hx-get="/disconnection" hx-swap="outerHTML" class="connected">disconnect</button>
+}
