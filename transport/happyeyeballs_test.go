@@ -227,8 +227,26 @@ func TestHappyEyeballsStreamDialer_DialStream(t *testing.T) {
 
 	/* Commenting out flaky test until we have time to fix the race condition
 	t.Run("IP order", func(t *testing.T) {
+		waitForIPv4Ch := make(chan struct{})
 		dialFailErr := errors.New("failed to dial")
-		baseDialer := collectStreamDialer{Dialer: newErrorStreamDialer(dialFailErr)}
+		baseDialer := collectStreamDialer{Dialer: FuncStreamDialer(func(ctx context.Context, addr string) (StreamConn, error) {
+			ap, err := netip.ParseAddrPort(addr)
+			require.NoError(t, err)
+			if ap.Addr().Is4() {
+				select {
+				case <-waitForIPv4Ch:
+					// Avoids closing a closed channel.
+				default:
+					close(waitForIPv4Ch)
+				}
+			} else {
+				// We block IPv6 dials until we have IPv4 results. Otherwise all IPv6 dials may proceed before the IPv4 results
+				// are processed, resulting on a race condition.
+				<-waitForIPv4Ch
+			}
+			time.Sleep(time.Microsecond)
+			return nil, dialFailErr
+		})}
 		dialer := HappyEyeballsStreamDialer{
 			Dialer: &baseDialer,
 			Resolve: NewParallelHappyEyeballsResolveFunc(
