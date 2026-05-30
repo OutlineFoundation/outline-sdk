@@ -30,7 +30,7 @@ import (
 func registerDO53StreamDialer(r TypeRegistry[transport.StreamDialer], typeID string, newSD BuildFunc[transport.StreamDialer], newPD BuildFunc[transport.PacketDialer]) {
 	r.RegisterType(typeID, func(ctx context.Context, config *Config) (transport.StreamDialer, error) {
 		if config == nil {
-			return nil, fmt.Errorf("emtpy do53 config")
+			return nil, fmt.Errorf("empty do53 config")
 		}
 		sd, err := newSD(ctx, config.BaseConfig)
 		if err != nil {
@@ -51,7 +51,7 @@ func registerDO53StreamDialer(r TypeRegistry[transport.StreamDialer], typeID str
 func registerDOHStreamDialer(r TypeRegistry[transport.StreamDialer], typeID string, newSD BuildFunc[transport.StreamDialer]) {
 	r.RegisterType(typeID, func(ctx context.Context, config *Config) (transport.StreamDialer, error) {
 		if config == nil {
-			return nil, fmt.Errorf("emtpy doh config")
+			return nil, fmt.Errorf("empty doh config")
 		}
 		sd, err := newSD(ctx, config.BaseConfig)
 		if err != nil {
