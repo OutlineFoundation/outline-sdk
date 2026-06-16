@@ -230,7 +230,9 @@ func serveTLSHandshakes(t *testing.T, cert stdTLS.Certificate) string {
 	}()
 
 	t.Cleanup(func() {
-		t.Error(listener.Close())
+		if err := listener.Close(); err != nil {
+			t.Error(err)
+		}
 		<-done
 	})
 	return listener.Addr().String()
