@@ -44,8 +44,7 @@ func TestRelayCanBeUpdated(t *testing.T) {
 	require.Exactly(t, 0, newRelay.Count())
 
 	// SetRelay should not call NewAssociation
-	err = p.SetRelay(newRelay)
-	require.NoError(t, err)
+	p.SetRelay(newRelay)
 	require.Exactly(t, 1, defRelay.Count())
 	require.Exactly(t, 0, newRelay.Count())
 
@@ -84,8 +83,7 @@ func TestSetRelayRaceCondition(t *testing.T) {
 	setRelayTask.Add(1)
 	go func() {
 		for i := 0; !cancelSetRelay.Load(); i = (i + 1) % relaysCnt {
-			err := dr.SetRelay(relays[i])
-			require.NoError(t, err)
+			dr.SetRelay(relays[i])
 		}
 		setRelayTask.Done()
 	}()
@@ -112,20 +110,23 @@ func TestSetRelayRaceCondition(t *testing.T) {
 	require.Equal(t, expectedTotal, actualTotal)
 }
 
-// Make sure we cannot SetRelay to nil
+// Make sure we can SetRelay to nil, which makes NewAssociation fail with errNoRelay
 func TestSetRelayWithNilValue(t *testing.T) {
-	// must not initialize with nil
+	// initialization with nil does not return error, but calling NewAssociation will return errNoRelay
 	dr, err := NewDelegatePacketRelay(nil)
-	require.Error(t, err)
-	require.Nil(t, dr)
+	require.NoError(t, err)
+	require.NotNil(t, dr)
+	_, _, err = dr.NewAssociation()
+	require.ErrorIs(t, err, errNoRelay)
 
 	dr, err = NewDelegatePacketRelay(&sessionCountPacketRelay{})
 	require.NoError(t, err)
 	require.NotNil(t, dr)
 
-	// must not SetRelay to nil
-	err = dr.SetRelay(nil)
-	require.Error(t, err)
+	// SetRelay(nil) should not panic or error, but calling NewAssociation afterwards will return errNoRelay
+	dr.SetRelay(nil)
+	_, _, err = dr.NewAssociation()
+	require.ErrorIs(t, err, errNoRelay)
 }
 
 // Make sure we can SetRelay to different types
@@ -138,8 +139,7 @@ func TestSetRelayOfDifferentTypes(t *testing.T) {
 	require.NoError(t, err)
 
 	// SetRelay should not return error
-	err = p.SetRelay(newRelay)
-	require.NoError(t, err)
+	p.SetRelay(newRelay)
 
 	// NewAssociation should not go to defRelay
 	snd, rcv, err := p.NewAssociation()
