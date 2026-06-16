@@ -19,6 +19,7 @@ import (
 	"crypto/ecdsa"
 	"crypto/elliptic"
 	"crypto/rand"
+	stdTLS "crypto/tls"
 	"crypto/x509"
 	"crypto/x509/pkix"
 	"math/big"
@@ -26,8 +27,8 @@ import (
 	"testing"
 	"time"
 
-	"golang.getoutline.org/sdk/transport"
 	"github.com/stretchr/testify/require"
+	"golang.getoutline.org/sdk/transport"
 )
 
 func TestDomain(t *testing.T) {
@@ -44,17 +45,53 @@ func TestDomain(t *testing.T) {
 }
 
 func TestUntrustedRoot(t *testing.T) {
-	sd, err := NewStreamDialer(&transport.TCPDialer{})
+	now := time.Now()
+	rootCA, rootKey := createRootCA(t)
+	leafCert, leafKey := createLeafCert(t,
+		[]string{"localhost"},
+		[]net.IP{net.ParseIP("127.0.0.1")},
+		rootCA, rootKey,
+		now.Add(-time.Hour), now.Add(time.Hour),
+	)
+
+	addr := serveTLSHandshakes(t, stdTLS.Certificate{
+		Certificate: [][]byte{leafCert.Raw},
+		PrivateKey:  leafKey,
+	})
+	host, _, err := net.SplitHostPort(addr)
 	require.NoError(t, err)
-	_, err = sd.DialStream(context.Background(), "untrusted-root.badssl.com:443")
+
+	verifier := &StandardCertVerifier{CertificateName: host, Roots: x509.NewCertPool()}
+	sd, err := NewStreamDialer(&transport.TCPDialer{}, WithCertVerifier(verifier))
+	require.NoError(t, err)
+	_, err = sd.DialStream(context.Background(), addr)
 	var certErr x509.UnknownAuthorityError
 	require.ErrorAs(t, err, &certErr)
 }
 
 func TestExpired(t *testing.T) {
-	sd, err := NewStreamDialer(&transport.TCPDialer{})
+	now := time.Now()
+	rootCA, rootKey := createRootCA(t)
+	leafCert, leafKey := createLeafCert(t,
+		[]string{"localhost"},
+		[]net.IP{net.ParseIP("127.0.0.1")},
+		rootCA, rootKey,
+		now.Add(-2*time.Hour), now.Add(-time.Hour),
+	)
+	rootPool := x509.NewCertPool()
+	rootPool.AddCert(rootCA)
+
+	addr := serveTLSHandshakes(t, stdTLS.Certificate{
+		Certificate: [][]byte{leafCert.Raw},
+		PrivateKey:  leafKey,
+	})
+	host, _, err := net.SplitHostPort(addr)
 	require.NoError(t, err)
-	_, err = sd.DialStream(context.Background(), "expired.badssl.com:443")
+
+	verifier := &StandardCertVerifier{CertificateName: host, Roots: rootPool}
+	sd, err := NewStreamDialer(&transport.TCPDialer{}, WithCertVerifier(verifier))
+	require.NoError(t, err)
+	_, err = sd.DialStream(context.Background(), addr)
 	var certErr x509.CertificateInvalidError
 	require.ErrorAs(t, err, &certErr)
 	require.Equal(t, x509.Expired, certErr.Reason)
@@ -169,6 +206,34 @@ type connCounterDialer struct {
 type countedStreamConn struct {
 	transport.StreamConn
 	counter *connCounterDialer
+}
+
+func serveTLSHandshakes(t *testing.T, cert stdTLS.Certificate) string {
+	t.Helper()
+
+	listener, err := stdTLS.Listen("tcp", "127.0.0.1:0", &stdTLS.Config{Certificates: []stdTLS.Certificate{cert}})
+	require.NoError(t, err)
+
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		for {
+			conn, err := listener.Accept()
+			if err != nil {
+				return
+			}
+			go func(conn net.Conn) {
+				defer conn.Close()
+				_ = conn.(*stdTLS.Conn).Handshake()
+			}(conn)
+		}
+	}()
+
+	t.Cleanup(func() {
+		require.NoError(t, listener.Close())
+		<-done
+	})
+	return listener.Addr().String()
 }
 
 func (d *connCounterDialer) DialStream(ctx context.Context, raddr string) (transport.StreamConn, error) {
