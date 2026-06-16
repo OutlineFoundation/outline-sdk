@@ -48,7 +48,7 @@ func (d *mockStreamDialer) DialStream(ctx context.Context, addr string) (transpo
 	if addr == "captive-portal.badssl.com:443" {
 		return d.base.DialStream(ctx, d.captivePortalServerAddr)
 	}
-	return nil, errors.New("dial DNS resolver failed")
+	return nil, errors.New("mock network: no route to host")
 }
 
 // errorPacketDialer simulates UDP dial failures by immediately returning an error.
