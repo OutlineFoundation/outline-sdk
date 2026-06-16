@@ -58,10 +58,10 @@ func NewInterceptDNSPacketRelay(dnsRelay, defaultRelay packetrelay.PacketRelay, 
 // State machine for lazy default association initialization:
 //
 // stateIdle: Initial state. No default association created yet.
-// stateInitializing: A SendPacket call is currently invoking NewAssociation on the defaultRelay.
-//   Other concurrent SendPacket calls will block waiting for this to finish.
-// stateInitialized: The default association has been resolved (either success or error cached).
-//   Future SendPacket calls will immediately use the cached result.
+// stateInitializing: A SendPacket call is currently invoking NewAssociation on the defaultRelay;
+// other concurrent SendPacket calls will block waiting for this to finish.
+// stateInitialized: The default association has been resolved (either success or error cached);
+// future SendPacket calls will immediately use the cached result.
 const (
 	stateIdle = iota
 	stateInitializing
@@ -295,7 +295,7 @@ var _ packetrelay.PacketSender = (*interceptSender)(nil)
 // on the DNS relay, rewrites the destination, and forwards the packet.
 // Otherwise, it lazily initializes and uses a single association on the default relay.
 func (s *interceptSender) SendPacket(p []byte, destination netip.AddrPort) error {
-	if destination == s.a.relay.dnsLocalResolver {
+	if isSameAddrPort(destination, s.a.relay.dnsLocalResolver) {
 		return s.a.handleDNSQuery(p)
 	}
 
@@ -304,6 +304,12 @@ func (s *interceptSender) SendPacket(p []byte, destination netip.AddrPort) error
 		return err
 	}
 	return defSender.SendPacket(p, destination)
+}
+
+// isSameAddrPort treats IPv4 and IPv4-mapped IPv6 addresses as equivalent because
+// some network stacks surface IPv4 UDP destinations in IPv4-mapped form.
+func isSameAddrPort(a, b netip.AddrPort) bool {
+	return a.Addr().Unmap() == b.Addr().Unmap() && a.Port() == b.Port()
 }
 
 // Close terminates the parent association and immediately closes all active sub-associations,
