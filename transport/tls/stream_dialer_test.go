@@ -23,7 +23,11 @@ import (
 	"crypto/x509"
 	"crypto/x509/pkix"
 	"math/big"
+	"io"
+	"log"
 	"net"
+	"net/http"
+	"net/http/httptest"
 	"testing"
 	"time"
 
@@ -211,31 +215,12 @@ type countedStreamConn struct {
 func serveTLSHandshakes(t *testing.T, cert stdTLS.Certificate) string {
 	t.Helper()
 
-	listener, err := stdTLS.Listen("tcp", "127.0.0.1:0", &stdTLS.Config{Certificates: []stdTLS.Certificate{cert}})
-	require.NoError(t, err)
-
-	done := make(chan struct{})
-	go func() {
-		defer close(done)
-		for {
-			conn, err := listener.Accept()
-			if err != nil {
-				return
-			}
-			go func(conn net.Conn) {
-				defer conn.Close()
-				_ = conn.(*stdTLS.Conn).Handshake()
-			}(conn)
-		}
-	}()
-
-	t.Cleanup(func() {
-		if err := listener.Close(); err != nil {
-			t.Error(err)
-		}
-		<-done
-	})
-	return listener.Addr().String()
+	srv := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {}))
+	srv.TLS = &stdTLS.Config{Certificates: []stdTLS.Certificate{cert}}
+	srv.Config.ErrorLog = log.New(io.Discard, "", 0)
+	srv.StartTLS()
+	t.Cleanup(srv.Close)
+	return srv.Listener.Addr().String()
 }
 
 func (d *connCounterDialer) DialStream(ctx context.Context, raddr string) (transport.StreamConn, error) {
