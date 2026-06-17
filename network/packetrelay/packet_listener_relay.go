@@ -35,10 +35,6 @@ const packetMaxSize = 2048
 // packetBufferPool is used to create buffers to read UDP response packets
 var packetBufferPool = slicepool.MakePool(packetMaxSize)
 
-// DefaultPacketListenerRelayWriteIdleTimeout is the default write-idle timeout for
-// associations created by [PacketListenerRelay].
-const DefaultPacketListenerRelayWriteIdleTimeout = 30 * time.Second
-
 // Compilation guard against interface implementation
 var _ PacketRelay = (*PacketListenerRelay)(nil)
 var _ PacketSender = (*packetListenerSender)(nil)
@@ -58,14 +54,17 @@ type PacketListenerRelay struct {
 // with one of the network stacks (for example, network/lwip2transport) as a UDP traffic handler.
 //
 // Associations use a write-idle timeout that is reset only by [PacketSender.SendPacket], not by
-// incoming packets. The default timeout is [DefaultPacketListenerRelayWriteIdleTimeout].
-func NewPacketRelayFromPacketListener(pl transport.PacketListener) (*PacketListenerRelay, error) {
+// incoming packets.
+func NewPacketRelayFromPacketListener(pl transport.PacketListener, writeIdleTimeout time.Duration) (*PacketListenerRelay, error) {
 	if pl == nil {
 		return nil, errors.New("pl must not be nil")
 	}
+	if writeIdleTimeout <= 0 {
+		return nil, errors.New("writeIdleTimeout must be greater than 0")
+	}
 	r := &PacketListenerRelay{
 		listener:         pl,
-		writeIdleTimeout: DefaultPacketListenerRelayWriteIdleTimeout,
+		writeIdleTimeout: writeIdleTimeout,
 	}
 	return r, nil
 }

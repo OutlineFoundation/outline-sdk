@@ -41,7 +41,7 @@ type PacketListenerProxy struct {
 // Deprecated: Use [packetrelay.NewPacketRelayFromPacketListener] instead.
 func NewPacketProxyFromPacketListener(pl transport.PacketListener, options ...func(*PacketListenerProxy) error) (*PacketListenerProxy, error) {
 	p := &PacketListenerProxy{
-		writeIdleTimeout: packetrelay.DefaultPacketListenerRelayWriteIdleTimeout,
+		writeIdleTimeout: 30 * time.Second,
 	}
 
 	// Apply options
@@ -51,11 +51,8 @@ func NewPacketProxyFromPacketListener(pl transport.PacketListener, options ...fu
 		}
 	}
 
-	baseRelay, err := packetrelay.NewPacketRelayFromPacketListener(pl)
+	baseRelay, err := packetrelay.NewPacketRelayFromPacketListener(pl, p.writeIdleTimeout)
 	if err != nil {
-		return nil, err
-	}
-	if err := baseRelay.SetWriteIdleTimeout(p.writeIdleTimeout); err != nil {
 		return nil, err
 	}
 	p.baseRelay = baseRelay

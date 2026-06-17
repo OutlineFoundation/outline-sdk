@@ -29,14 +29,26 @@ func TestNewPacketRelayFromPacketListener(t *testing.T) {
 	conn := &fakePacketConn{}
 	pl := &fakePacketListener{conn: conn}
 
-	relay, err := NewPacketRelayFromPacketListener(pl)
+	relay, err := NewPacketRelayFromPacketListener(pl, 30*time.Second)
 	require.NoError(t, err)
 	require.NotNil(t, relay)
 
 	_, _, err = relay.NewAssociation()
 	require.NoError(t, err)
 	require.Len(t, conn.deadlines, 1)
-	requireDeadlineNear(t, conn.deadlines[0], DefaultPacketListenerRelayWriteIdleTimeout)
+	requireDeadlineNear(t, conn.deadlines[0], 30*time.Second)
+}
+
+func TestNewPacketRelayFromPacketListenerRejectsInvalidTimeout(t *testing.T) {
+	pl := &fakePacketListener{conn: &fakePacketConn{}}
+
+	relay, err := NewPacketRelayFromPacketListener(pl, 0)
+	require.Error(t, err)
+	require.Nil(t, relay)
+
+	relay, err = NewPacketRelayFromPacketListener(pl, -1*time.Second)
+	require.Error(t, err)
+	require.Nil(t, relay)
 }
 
 func TestPacketListenerRelaySetWriteIdleTimeout(t *testing.T) {
@@ -44,7 +56,7 @@ func TestPacketListenerRelaySetWriteIdleTimeout(t *testing.T) {
 	pl := &fakePacketListener{conn: conn}
 	timeout := 5 * time.Minute
 
-	relay, err := NewPacketRelayFromPacketListener(pl)
+	relay, err := NewPacketRelayFromPacketListener(pl, 30*time.Second)
 	require.NoError(t, err)
 	require.NoError(t, relay.SetWriteIdleTimeout(timeout))
 
@@ -64,7 +76,7 @@ func TestPacketListenerRelaySetWriteIdleTimeoutRejectsInvalidTimeout(t *testing.
 	conn := &fakePacketConn{}
 	pl := &fakePacketListener{conn: conn}
 
-	relay, err := NewPacketRelayFromPacketListener(pl)
+	relay, err := NewPacketRelayFromPacketListener(pl, 30*time.Second)
 	require.NoError(t, err)
 	require.Error(t, relay.SetWriteIdleTimeout(0))
 }
@@ -73,7 +85,7 @@ func TestPacketListenerRelayReceiveTimeoutClosesAssociation(t *testing.T) {
 	conn := &fakePacketConn{readErr: timeoutErr{}}
 	pl := &fakePacketListener{conn: conn}
 
-	relay, err := NewPacketRelayFromPacketListener(pl)
+	relay, err := NewPacketRelayFromPacketListener(pl, 30*time.Second)
 	require.NoError(t, err)
 	_, receiver, err := relay.NewAssociation()
 	require.NoError(t, err)
