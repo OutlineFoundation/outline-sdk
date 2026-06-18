@@ -174,6 +174,62 @@ func TestDNSQueryRouting(t *testing.T) {
 	})
 }
 
+func TestDNSQueryRoutingWithIPv4MappedLocalResolver(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		dnsRelay := &mockRelay{}
+		defaultRelay := &mockRelay{}
+		localRes := netip.MustParseAddrPort("10.0.0.1:53")
+		remoteRes := netip.MustParseAddrPort("8.8.8.8:53")
+		relay := NewInterceptDNSPacketRelay(dnsRelay, defaultRelay, localRes, remoteRes)
+
+		sender, receiver, err := relay.NewAssociation()
+		if err != nil {
+			t.Fatalf("NewAssociation failed: %v", err)
+		}
+
+		handler := &mockHandler{packets: make(chan packetData, 10)}
+		go receiver.ReceivePackets(handler)
+
+		reqData := []byte("dns_query")
+		mappedLocalRes := netip.MustParseAddrPort("[::ffff:10.0.0.1]:53")
+		if err := sender.SendPacket(reqData, mappedLocalRes); err != nil {
+			t.Fatalf("SendPacket failed: %v", err)
+		}
+		synctest.Wait()
+
+		if dnsRelay.newAssocCount != 1 {
+			t.Fatalf("Expected 1 DNS association, got %d", dnsRelay.newAssocCount)
+		}
+		if defaultRelay.newAssocCount != 0 {
+			t.Fatalf("Expected 0 default associations, got %d", defaultRelay.newAssocCount)
+		}
+
+		dnsSender := dnsRelay.senders[0]
+		pd := <-dnsSender.packets
+		if !bytes.Equal(pd.p, reqData) {
+			t.Errorf("Expected packet %q, got %q", reqData, pd.p)
+		}
+		if pd.dest != remoteRes {
+			t.Errorf("Expected dest %v, got %v", remoteRes, pd.dest)
+		}
+
+		respData := []byte("dns_response")
+		dnsSender.receiver.PushResponse(respData, remoteRes)
+		synctest.Wait()
+
+		resp := <-handler.packets
+		if !bytes.Equal(resp.p, respData) {
+			t.Errorf("Expected response %q, got %q", respData, resp.p)
+		}
+		if resp.dest != localRes {
+			t.Errorf("Expected rewritten source %v, got %v", localRes, resp.dest)
+		}
+		if !dnsSender.IsClosed() {
+			t.Errorf("Expected DNS sender to be closed after one response")
+		}
+	})
+}
+
 func TestDefaultRouting(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		dnsRelay := &mockRelay{}

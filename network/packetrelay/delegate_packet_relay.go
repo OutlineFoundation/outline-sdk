@@ -33,10 +33,10 @@ type DelegatePacketRelay interface {
 
 	// SetRelay updates the underlying PacketRelay to `relay`; `relay` must not be nil. After this function
 	// returns, all new PacketRelay calls will be forwarded to the `relay`. Existing associations will not be affected.
-	SetRelay(relay PacketRelay) error
+	SetRelay(relay PacketRelay)
 }
 
-var errInvalidRelay = errors.New("the underlying relay must not be nil")
+var errNoRelay = errors.New("no relay configured")
 
 // Compilation guard against interface implementation
 var _ DelegatePacketRelay = (*delegatePacketRelay)(nil)
@@ -51,24 +51,22 @@ type delegatePacketRelay struct {
 // NewDelegatePacketRelay creates a new [DelegatePacketRelay] that forwards calls to the `relay` [PacketRelay].
 // The `relay` must not be nil.
 func NewDelegatePacketRelay(relay PacketRelay) (DelegatePacketRelay, error) {
-	if relay == nil {
-		return nil, errInvalidRelay
-	}
 	dr := delegatePacketRelay{}
 	dr.relay.Store(&relay)
 	return &dr, nil
 }
 
 // NewAssociation implements PacketRelay.NewAssociation, and it will forward the call to the underlying PacketRelay.
+// Returns an error if the underlying relay is nil.
 func (p *delegatePacketRelay) NewAssociation() (PacketSender, PacketReceiver, error) {
-	return (*p.relay.Load()).NewAssociation()
+	relayPtr := p.relay.Load()
+	if relayPtr == nil || *relayPtr == nil {
+		return nil, nil, errNoRelay
+	}
+	return (*relayPtr).NewAssociation()
 }
 
 // SetRelay implements DelegatePacketRelay.SetRelay.
-func (p *delegatePacketRelay) SetRelay(relay PacketRelay) error {
-	if relay == nil {
-		return errInvalidRelay
-	}
+func (p *delegatePacketRelay) SetRelay(relay PacketRelay) {
 	p.relay.Store(&relay)
-	return nil
 }

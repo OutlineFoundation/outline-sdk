@@ -40,15 +40,8 @@ type PacketListenerProxy struct {
 //
 // Deprecated: Use [packetrelay.NewPacketRelayFromPacketListener] instead.
 func NewPacketProxyFromPacketListener(pl transport.PacketListener, options ...func(*PacketListenerProxy) error) (*PacketListenerProxy, error) {
-	// Create the underlying base relay
-	baseRelay, err := packetrelay.NewPacketRelayFromPacketListener(pl)
-	if err != nil {
-		return nil, err
-	}
-
 	p := &PacketListenerProxy{
-		baseRelay:        baseRelay,
-		writeIdleTimeout: 30 * time.Second, // Default timeout
+		writeIdleTimeout: 30 * time.Second,
 	}
 
 	// Apply options
@@ -58,12 +51,12 @@ func NewPacketProxyFromPacketListener(pl transport.PacketListener, options ...fu
 		}
 	}
 
-	// Build the final relay chain: TimeoutPacketRelay(PacketListenerRelay)
-	timeoutRelay, err := packetrelay.NewTimeoutPacketRelay(p.baseRelay, p.writeIdleTimeout)
+	baseRelay, err := packetrelay.NewPacketRelayFromPacketListener(pl, p.writeIdleTimeout)
 	if err != nil {
 		return nil, err
 	}
-	p.relay = timeoutRelay
+	p.baseRelay = baseRelay
+	p.relay = baseRelay
 
 	return p, nil
 }
@@ -72,7 +65,7 @@ func NewPacketProxyFromPacketListener(pl transport.PacketListener, options ...fu
 // This means that if there are no WriteTo operations on the UDP session created by NewSession for the specified amount
 // of time, the proxy will end this session.
 //
-// Deprecated: Use [packetrelay.NewTimeoutPacketRelay] to decorate the underlying [packetrelay.PacketRelay] instead.
+// Deprecated: Use [packetrelay.PacketListenerRelay.SetWriteIdleTimeout] instead.
 func WithPacketListenerWriteIdleTimeout(timeout time.Duration) func(*PacketListenerProxy) error {
 	return func(p *PacketListenerProxy) error {
 		if timeout <= 0 {

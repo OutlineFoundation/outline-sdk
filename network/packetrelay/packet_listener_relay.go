@@ -21,6 +21,7 @@ import (
 	"net"
 	"net/netip"
 	"sync"
+	"time"
 
 	"golang.getoutline.org/sdk/internal/slicepool"
 	"golang.getoutline.org/sdk/transport"
@@ -42,87 +43,147 @@ var _ PacketReceiver = (*packetListenerReceiver)(nil)
 // PacketListenerRelay creates a new [PacketRelay] that uses the existing [transport.PacketListener] to
 // create connections to a relay.
 type PacketListenerRelay struct {
-	listener transport.PacketListener
+	mu               sync.RWMutex
+	listener         transport.PacketListener
+	writeIdleTimeout time.Duration
 }
 
 // NewPacketRelayFromPacketListener creates a new [PacketRelay] that uses the existing [transport.PacketListener] to
-// create connections to a relay. You can also specify additional options.
+// create connections to a relay.
 // This function is useful if you already have an implementation of [transport.PacketListener] and you want to use it
 // with one of the network stacks (for example, network/lwip2transport) as a UDP traffic handler.
-func NewPacketRelayFromPacketListener(pl transport.PacketListener, options ...func(*PacketListenerRelay) error) (*PacketListenerRelay, error) {
+//
+// Associations use a write-idle timeout that is reset only by [PacketSender.SendPacket], not by
+// incoming packets.
+func NewPacketRelayFromPacketListener(pl transport.PacketListener, writeIdleTimeout time.Duration) (*PacketListenerRelay, error) {
 	if pl == nil {
 		return nil, errors.New("pl must not be nil")
 	}
-	r := &PacketListenerRelay{
-		listener: pl,
+	if writeIdleTimeout <= 0 {
+		return nil, errors.New("writeIdleTimeout must be greater than 0")
 	}
-	for _, opt := range options {
-		if err := opt(r); err != nil {
-			return nil, err
-		}
+	r := &PacketListenerRelay{
+		listener:         pl,
+		writeIdleTimeout: writeIdleTimeout,
 	}
 	return r, nil
+}
+
+// SetWriteIdleTimeout sets the write-idle timeout for new associations.
+// Existing associations keep the timeout they were created with.
+func (relay *PacketListenerRelay) SetWriteIdleTimeout(timeout time.Duration) error {
+	if timeout <= 0 {
+		return errors.New("timeout must be greater than 0")
+	}
+	relay.mu.Lock()
+	defer relay.mu.Unlock()
+	relay.writeIdleTimeout = timeout
+	return nil
 }
 
 // NewAssociation implements [PacketRelay].NewAssociation. It uses [transport.PacketListener].ListenPacket to create
 // a [net.PacketConn], and returns a [PacketSender] and [PacketReceiver] based on this [net.PacketConn].
 func (relay *PacketListenerRelay) NewAssociation() (PacketSender, PacketReceiver, error) {
-	packetConn, err := relay.listener.ListenPacket(context.Background())
+	relay.mu.RLock()
+	listener := relay.listener
+	writeIdleTimeout := relay.writeIdleTimeout
+	relay.mu.RUnlock()
+
+	packetConn, err := listener.ListenPacket(context.Background())
 	if err != nil {
 		return nil, nil, err
 	}
 
+	association := &packetListenerAssociation{
+		packetConn:       packetConn,
+		writeIdleTimeout: writeIdleTimeout,
+	}
+	if err := association.refreshDeadline(); err != nil {
+		_ = association.close()
+		return nil, nil, err
+	}
+
 	sender := &packetListenerSender{
-		packetConn: packetConn,
+		association: association,
 	}
 
 	receiver := &packetListenerReceiver{
-		packetConn: packetConn,
+		association: association,
+		packetConn:  packetConn,
 	}
 
 	return sender, receiver, nil
 }
 
-type packetListenerSender struct {
-	mu     sync.Mutex // Protects closed flag
-	closed bool
+type packetListenerAssociation struct {
+	mu               sync.Mutex
+	closed           bool
+	packetConn       net.PacketConn
+	writeIdleTimeout time.Duration
+}
 
-	packetConn net.PacketConn
+func (a *packetListenerAssociation) refreshDeadline() error {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+
+	if a.closed {
+		return ErrClosed
+	}
+	return a.packetConn.SetDeadline(time.Now().Add(a.writeIdleTimeout))
+}
+
+func (a *packetListenerAssociation) getPacketConn() (net.PacketConn, error) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+
+	if a.closed {
+		return nil, ErrClosed
+	}
+	return a.packetConn, nil
+}
+
+func (a *packetListenerAssociation) close() error {
+	a.mu.Lock()
+	if a.closed {
+		a.mu.Unlock()
+		return ErrClosed
+	}
+	a.closed = true
+	packetConn := a.packetConn
+	a.packetConn = nil
+	a.mu.Unlock()
+
+	return packetConn.Close()
+}
+
+type packetListenerSender struct {
+	association *packetListenerAssociation
 }
 
 // SendPacket implements [PacketSender].SendPacket. It simply forwards the packet to the underlying
 // [net.PacketConn].WriteTo function.
 func (s *packetListenerSender) SendPacket(p []byte, destination netip.AddrPort) error {
-	s.mu.Lock()
-	if s.closed {
-		s.mu.Unlock()
-		return ErrClosed
+	if err := s.association.refreshDeadline(); err != nil {
+		return err
 	}
-	packetConn := s.packetConn
-	s.mu.Unlock()
+	packetConn, err := s.association.getPacketConn()
+	if err != nil {
+		return err
+	}
 
-	_, err := packetConn.WriteTo(p, net.UDPAddrFromAddrPort(destination))
+	_, err = packetConn.WriteTo(p, net.UDPAddrFromAddrPort(destination))
 	return err
 }
 
 // Close implements [PacketSender].Close. It closes the underlying [net.PacketConn]. This will also
 // terminate the blocking loop in ReceivePackets because s.packetConn.ReadFrom will return an error.
 func (s *packetListenerSender) Close() error {
-	s.mu.Lock()
-	if s.closed {
-		s.mu.Unlock()
-		return ErrClosed
-	}
-	s.closed = true
-	packetConn := s.packetConn
-	s.packetConn = nil
-	s.mu.Unlock()
-
-	return packetConn.Close()
+	return s.association.close()
 }
 
 type packetListenerReceiver struct {
-	packetConn net.PacketConn
+	association *packetListenerAssociation
+	packetConn  net.PacketConn
 }
 
 // ReceivePackets implements [PacketReceiver].ReceivePackets. It blocks and passes incoming packets
@@ -139,6 +200,7 @@ func (r *packetListenerReceiver) ReceivePackets(handler PacketHandler) error {
 			if errors.Is(err, io.ErrShortBuffer) {
 				continue
 			}
+			_ = r.association.close()
 			return err
 		}
 
