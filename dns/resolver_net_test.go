@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-// go:build nettest
+//go:build nettest
 
 package dns
 
@@ -40,7 +40,7 @@ func TestNewUDPResolver(t *testing.T) {
 	resolver := NewUDPResolver(&transport.UDPDialer{}, "8.8.8.8")
 	q, err := NewQuestion("getoutline.org.", dnsmessage.TypeAAAA)
 	require.NoError(t, err)
-	resp, err := resolver.Query(ctx, *q)
+	resp, err := resolver.Query(ctx, q)
 	require.NoError(t, err)
 	require.GreaterOrEqual(t, len(resp.Answers), 1)
 }
@@ -50,7 +50,7 @@ func TestNewTCPResolver(t *testing.T) {
 	resolver := NewTCPResolver(&transport.TCPDialer{}, "8.8.8.8")
 	q, err := NewQuestion("getoutline.org.", dnsmessage.TypeAAAA)
 	require.NoError(t, err)
-	resp, err := resolver.Query(ctx, *q)
+	resp, err := resolver.Query(ctx, q)
 	require.NoError(t, err)
 	require.GreaterOrEqual(t, len(resp.Answers), 1)
 }
@@ -60,7 +60,7 @@ func TestNewTLSResolver(t *testing.T) {
 	resolver := NewTLSResolver(&transport.TCPDialer{}, "8.8.8.8", "8.8.8.8")
 	q, err := NewQuestion("getoutline.org.", dnsmessage.TypeAAAA)
 	require.NoError(t, err)
-	resp, err := resolver.Query(ctx, *q)
+	resp, err := resolver.Query(ctx, q)
 	require.NoError(t, err)
 	require.GreaterOrEqual(t, len(resp.Answers), 1)
 }
@@ -70,7 +70,7 @@ func TestNewHTTPSResolver(t *testing.T) {
 	resolver := NewHTTPSResolver(&transport.TCPDialer{}, "8.8.8.8", "https://8.8.8.8/dns-query")
 	q, err := NewQuestion("getoutline.org.", dnsmessage.TypeAAAA)
 	require.NoError(t, err)
-	resp, err := resolver.Query(ctx, *q)
+	resp, err := resolver.Query(ctx, q)
 	require.NoError(t, err)
 	require.GreaterOrEqual(t, len(resp.Answers), 1)
 }

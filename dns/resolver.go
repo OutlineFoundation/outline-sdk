@@ -70,16 +70,16 @@ func (f FuncResolver) Query(ctx context.Context, q dnsmessage.Question) (*dnsmes
 
 // NewQuestion is a convenience function to create a [dnsmessage.Question].
 // The input domain is interpreted as fully-qualified. If the end "." is missing, it's added.
-func NewQuestion(domain string, qtype dnsmessage.Type) (*dnsmessage.Question, error) {
+func NewQuestion(domain string, qtype dnsmessage.Type) (dnsmessage.Question, error) {
 	fullDomain := domain
 	if len(domain) == 0 || domain[len(domain)-1] != '.' {
 		fullDomain += "."
 	}
 	name, err := dnsmessage.NewName(fullDomain)
 	if err != nil {
-		return nil, fmt.Errorf("cannot parse domain name: %w", err)
+		return dnsmessage.Question{}, fmt.Errorf("cannot parse domain name: %w", err)
 	}
-	return &dnsmessage.Question{
+	return dnsmessage.Question{
 		Name:  name,
 		Type:  qtype,
 		Class: dnsmessage.ClassINET,
@@ -324,12 +324,72 @@ func NewTLSResolver(sd transport.StreamDialer, resolverAddr string, resolverName
 	}
 }
 
-// NewHTTPSResolver creates a [Resolver] that implements the [DNS-over-HTTPS] protocol, using a [transport.StreamDialer]
-// to connect to the resolverAddr, and the url as the DoH template URI.
-// It uses an internal HTTP client that reuses connections when possible.
+// HTTPSResolver is a [Resolver] that implements [DNS-over-HTTPS].
+// It implements [io.Closer] to release idle connections.
 //
 // [DNS-over-HTTPS]: https://datatracker.ietf.org/doc/html/rfc8484
-func NewHTTPSResolver(sd transport.StreamDialer, resolverAddr string, url string) Resolver {
+type HTTPSResolver struct {
+	client http.Client
+	url    string
+}
+
+// Query implements [Resolver].
+func (r *HTTPSResolver) Query(ctx context.Context, q dnsmessage.Question) (*dnsmessage.Message, error) {
+	// Prepare request.
+	buf, err := appendRequest(0, q, make([]byte, 0, 512))
+	if err != nil {
+		return nil, &nestedError{ErrBadRequest, fmt.Errorf("append request failed: %w", err)}
+	}
+	httpReq, err := http.NewRequestWithContext(ctx, "POST", r.url, bytes.NewBuffer(buf))
+	if err != nil {
+		return nil, &nestedError{ErrBadRequest, fmt.Errorf("create HTTP request failed: %w", err)}
+	}
+	const mimetype = "application/dns-message"
+	httpReq.Header.Add("Accept", mimetype)
+	httpReq.Header.Add("Content-Type", mimetype)
+
+	// Send request and get response.
+	httpResp, err := r.client.Do(httpReq)
+	if err != nil {
+		// Preserve ErrDial if the failure was a connection error.
+		if errors.Is(err, ErrDial) {
+			return nil, err
+		}
+		return nil, &nestedError{ErrReceive, fmt.Errorf("failed to get HTTP response: %w", err)}
+	}
+	defer httpResp.Body.Close()
+	if httpResp.StatusCode != http.StatusOK {
+		return nil, &nestedError{ErrReceive, fmt.Errorf("got HTTP status %v", httpResp.StatusCode)}
+	}
+	response, err := io.ReadAll(httpResp.Body)
+	if err != nil {
+		return nil, &nestedError{ErrReceive, fmt.Errorf("failed to read response: %w", err)}
+	}
+
+	// Process response.
+	var msg dnsmessage.Message
+	if err = msg.Unpack(response); err != nil {
+		return nil, &nestedError{ErrBadResponse, fmt.Errorf("failed to unpack DNS response: %w", err)}
+	}
+	if err := checkResponse(0, q, msg.Header, msg.Questions); err != nil {
+		return nil, &nestedError{ErrBadResponse, err}
+	}
+	return &msg, nil
+}
+
+// Close releases idle connections held by the underlying HTTP transport.
+func (r *HTTPSResolver) Close() error {
+	r.client.CloseIdleConnections()
+	return nil
+}
+
+// NewHTTPSResolver creates an [HTTPSResolver] that implements the [DNS-over-HTTPS] protocol, using a [transport.StreamDialer]
+// to connect to the resolverAddr, and the url as the DoH template URI.
+// It uses an internal HTTP client that reuses connections when possible.
+// Call [HTTPSResolver.Close] to release idle connections when done.
+//
+// [DNS-over-HTTPS]: https://datatracker.ietf.org/doc/html/rfc8484
+func NewHTTPSResolver(sd transport.StreamDialer, resolverAddr string, url string) *HTTPSResolver {
 	resolverAddr = ensurePort(resolverAddr, "443")
 	dialContext := func(ctx context.Context, network, addr string) (net.Conn, error) {
 		if !strings.HasPrefix(network, "tcp") {
@@ -342,52 +402,39 @@ func NewHTTPSResolver(sd transport.StreamDialer, resolverAddr string, url string
 		}
 		return conn, nil
 	}
-	// TODO: add mechanism to close idle connections.
 	// Copied from Intra: https://github.com/Jigsaw-Code/Intra/blob/d3554846a1146ae695e28a8ed6dd07f0cd310c5a/Android/tun2socks/intra/doh/doh.go#L213-L219
-	httpClient := http.Client{
-		Transport: &http.Transport{
-			DialContext:           dialContext,
-			ForceAttemptHTTP2:     true,
-			TLSHandshakeTimeout:   10 * time.Second,
-			ResponseHeaderTimeout: 20 * time.Second, // Same value as Android DNS-over-TLS
+	return &HTTPSResolver{
+		client: http.Client{
+			Transport: &http.Transport{
+				DialContext:           dialContext,
+				ForceAttemptHTTP2:     true,
+				TLSHandshakeTimeout:   10 * time.Second,
+				ResponseHeaderTimeout: 20 * time.Second, // Same value as Android DNS-over-TLS
+			},
 		},
+		url: url,
 	}
+}
+
+// NewDO53Resolver creates a [Resolver] that implements the [DNS-over-UDP] protocol with automatic
+// fallback to [DNS-over-TCP] when the UDP response is truncated, as per [RFC 1123 Section 6.1.3.2].
+// It uses pd for UDP transport and sd for TCP transport.
+//
+// [DNS-over-UDP]: https://datatracker.ietf.org/doc/html/rfc1035#section-4.2.1
+// [DNS-over-TCP]: https://datatracker.ietf.org/doc/html/rfc7766
+// [RFC 1123 Section 6.1.3.2]: https://datatracker.ietf.org/doc/html/rfc1123#page-75
+func NewDO53Resolver(pd transport.PacketDialer, sd transport.StreamDialer, resolverAddr string) Resolver {
+	udpResolver := NewUDPResolver(pd, resolverAddr)
+	tcpResolver := NewTCPResolver(sd, resolverAddr)
 	return FuncResolver(func(ctx context.Context, q dnsmessage.Question) (*dnsmessage.Message, error) {
-		// Prepare request.
-		buf, err := appendRequest(0, q, make([]byte, 0, 512))
+		msg, err := udpResolver.Query(ctx, q)
 		if err != nil {
-			return nil, &nestedError{ErrBadRequest, fmt.Errorf("append request failed: %w", err)}
+			return nil, err
 		}
-		httpReq, err := http.NewRequestWithContext(ctx, "POST", url, bytes.NewBuffer(buf))
-		if err != nil {
-			return nil, &nestedError{ErrBadRequest, fmt.Errorf("create HTTP request failed: %w", err)}
+		if !msg.Header.Truncated {
+			return msg, nil
 		}
-		const mimetype = "application/dns-message"
-		httpReq.Header.Add("Accept", mimetype)
-		httpReq.Header.Add("Content-Type", mimetype)
-
-		// Send request and get response.
-		httpResp, err := httpClient.Do(httpReq)
-		if err != nil {
-			return nil, &nestedError{ErrReceive, fmt.Errorf("failed to get HTTP response: %w", err)}
-		}
-		defer httpResp.Body.Close()
-		if httpResp.StatusCode != http.StatusOK {
-			return nil, &nestedError{ErrReceive, fmt.Errorf("got HTTP status %v", httpResp.StatusCode)}
-		}
-		response, err := io.ReadAll(httpResp.Body)
-		if err != nil {
-			return nil, &nestedError{ErrReceive, fmt.Errorf("failed to read response: %w", err)}
-		}
-
-		// Process response.
-		var msg dnsmessage.Message
-		if err = msg.Unpack(response); err != nil {
-			return nil, &nestedError{ErrBadResponse, fmt.Errorf("failed to unpack DNS response: %w", err)}
-		}
-		if err := checkResponse(0, q, msg.Header, msg.Questions); err != nil {
-			return nil, &nestedError{ErrBadResponse, err}
-		}
-		return &msg, nil
+		// If the message is truncated, retry over TCP.
+		return tcpResolver.Query(ctx, q)
 	})
 }
