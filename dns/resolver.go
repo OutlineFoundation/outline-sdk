@@ -68,6 +68,41 @@ func (f FuncResolver) Query(ctx context.Context, q dnsmessage.Question) (*dnsmes
 	return f(ctx, q)
 }
 
+// RawResolver can query DNS and return the raw wire-format response bytes as defined in RFC 1035.
+// Using plain name and qtype avoids a dependency on any specific DNS parsing library,
+// allowing callers to parse the response with any library — including those that support
+// record types not yet recognized by golang.org/x/net/dns/dnsmessage.
+type RawResolver interface {
+	QueryRaw(ctx context.Context, name string, qtype uint16, buf []byte) ([]byte, error)
+}
+
+// FuncRawResolver is a [RawResolver] that uses the given function to query DNS.
+type FuncRawResolver func(ctx context.Context, name string, qtype uint16, buf []byte) ([]byte, error)
+
+// QueryRaw implements the [RawResolver] interface.
+func (f FuncRawResolver) QueryRaw(ctx context.Context, name string, qtype uint16, buf []byte) ([]byte, error) {
+	return f(ctx, name, qtype, buf)
+}
+
+// RawToResolver wraps a [RawResolver] in a [Resolver] that parses the wire-format
+// response bytes using golang.org/x/net/dns/dnsmessage.
+// The underlying [RawResolver] is responsible for ID matching and returning valid bytes;
+// this adapter only unpacks the result.
+func RawToResolver(r RawResolver) Resolver {
+	return FuncResolver(func(ctx context.Context, q dnsmessage.Question) (*dnsmessage.Message, error) {
+		buf := make([]byte, 0, maxUDPMessageSize)
+		raw, err := r.QueryRaw(ctx, q.Name.String(), uint16(q.Type), buf)
+		if err != nil {
+			return nil, err
+		}
+		var msg dnsmessage.Message
+		if err := msg.Unpack(raw); err != nil {
+			return nil, &nestedError{ErrBadResponse, fmt.Errorf("failed to unpack DNS response: %w", err)}
+		}
+		return &msg, nil
+	})
+}
+
 // NewQuestion is a convenience function to create a [dnsmessage.Question].
 // The input domain is interpreted as fully-qualified. If the end "." is missing, it's added.
 func NewQuestion(domain string, qtype dnsmessage.Type) (*dnsmessage.Question, error) {
@@ -93,32 +128,96 @@ func NewQuestion(domain string, qtype dnsmessage.Type) (*dnsmessage.Question, er
 // for the IPv6 and UDP headers".
 const maxUDPMessageSize = 1232
 
-// appendRequest appends the bytes a DNS request using the id and question to buf.
-func appendRequest(id uint16, q dnsmessage.Question, buf []byte) ([]byte, error) {
-	b := dnsmessage.NewBuilder(buf, dnsmessage.Header{ID: id, RecursionDesired: true})
-	if err := b.StartQuestions(); err != nil {
-		return nil, fmt.Errorf("start questions failed: %w", err)
+// appendName splits a dot-separated domain name into DNS wire-format labels and appends them to buf.
+// It supports escaping characters using a backslash.
+func appendName(buf []byte, name string) ([]byte, error) {
+	if len(name) > 0 && name[len(name)-1] == '.' {
+		// Only strip the last dot if it's not escaped
+		if len(name) < 2 || name[len(name)-2] != '\\' {
+			name = name[:len(name)-1]
+		}
 	}
-	if err := b.Question(q); err != nil {
-		return nil, fmt.Errorf("add question failed: %w", err)
+	if len(name) == 0 {
+		return append(buf, 0), nil
 	}
-	if err := b.StartAdditionals(); err != nil {
-		return nil, fmt.Errorf("start additionals failed: %w", err)
-	}
+	startLength := len(buf)
+	
+	for len(name) > 0 {
+		buf = append(buf, 0) // Placeholder for label length
+		lblStart := len(buf)
+		
+		idx := -1
+		for i := 0; i < len(name); i++ {
+			if name[i] == '.' {
+				idx = i
+				break
+			} else if name[i] == '\\' && i+1 < len(name) {
+				i++
+				buf = append(buf, name[i])
+			} else {
+				buf = append(buf, name[i])
+			}
+		}
+		
+		lblLen := len(buf) - lblStart
+		if lblLen == 0 {
+			return nil, errors.New("empty label")
+		}
+		if lblLen > 63 {
+			return nil, errors.New("label too long")
+		}
+		buf[lblStart-1] = byte(lblLen) // Write the correct length
 
-	var rh dnsmessage.ResourceHeader
-	// Set the maximum payload size we support, as per https://datatracker.ietf.org/doc/html/rfc6891#section-4.3
-	if err := rh.SetEDNS0(maxUDPMessageSize, dnsmessage.RCodeSuccess, false); err != nil {
-		return nil, fmt.Errorf("set EDNS(0) failed: %w", err)
+		if idx == -1 {
+			name = ""
+		} else {
+			name = name[idx+1:]
+		}
 	}
-	if err := b.OPTResource(rh, dnsmessage.OPTResource{}); err != nil {
-		return nil, fmt.Errorf("add OPT RR failed: %w", err)
+	buf = append(buf, 0)
+	if len(buf)-startLength > 255 {
+		return nil, errors.New("name too long")
 	}
+	return buf, nil
+}
 
-	buf, err := b.Finish()
+// appendRequestRaw constructs a complete wire-format DNS request (Header, Question, OPT) and appends it to buf.
+func appendRequestRaw(id uint16, name string, qtype uint16, buf []byte) ([]byte, error) {
+	udpSize := uint16(cap(buf))
+	if udpSize < 512 {
+		udpSize = 512
+	}
+	
+	// Header: 12 bytes
+	buf = append(buf,
+		byte(id>>8), byte(id), // ID
+		0x01, 0x00, // Flags: RD=1
+		0x00, 0x01, // QDCOUNT=1
+		0x00, 0x00, // ANCOUNT=0
+		0x00, 0x00, // NSCOUNT=0
+		0x00, 0x01, // ARCOUNT=1 (OPT)
+	)
+
+	// Question Section
+	var err error
+	buf, err = appendName(buf, name)
 	if err != nil {
-		return nil, fmt.Errorf("message serialization failed: %w", err)
+		return nil, fmt.Errorf("invalid question name: %w", err)
 	}
+	buf = append(buf,
+		byte(qtype>>8), byte(qtype), // QTYPE
+		0x00, 0x01, // QCLASS (INET=1)
+	)
+
+	// Additional Section (OPT)
+	// As per https://datatracker.ietf.org/doc/html/rfc6891#section-4.3
+	buf = append(buf,
+		0x00,       // Name (root, 0 bytes)
+		0x00, 41,   // Type (OPT=41)
+		byte(udpSize>>8), byte(udpSize&0xFF), // UDP payload size
+		0x00, 0x00, 0x00, 0x00, // Ext RCODE, Version, Z
+		0x00, 0x00, // RDLENGTH (0)
+	)
 	return buf, nil
 }
 
@@ -144,36 +243,74 @@ func equalASCIIName(x, y dnsmessage.Name) bool {
 	return true
 }
 
-func checkResponse(reqID uint16, reqQues dnsmessage.Question, respHdr dnsmessage.Header, respQs []dnsmessage.Question) error {
-	if !respHdr.Response {
+// checkResponseRaw verifies the DNS response matches the request parameters directly on the wire bytes.
+func checkResponseRaw(reqID uint16, name string, qtype uint16, rawResp []byte) error {
+	if len(rawResp) < 12 {
+		return errors.New("response too short for header")
+	}
+	// Check Response bit (QR) which is bit 7 of byte 2 (flags top byte)
+	if rawResp[2]&0x80 == 0 {
 		return errors.New("response bit not set")
 	}
-
+	// Check ID
 	// https://datatracker.ietf.org/doc/html/rfc5452#section-4.3
-	if reqID != respHdr.ID {
-		return fmt.Errorf("message id does not match. Expected %v, got %v", reqID, respHdr.ID)
+	respID := binary.BigEndian.Uint16(rawResp[0:2])
+	if reqID != respID {
+		return fmt.Errorf("message id does not match. Expected %v, got %v", reqID, respID)
 	}
-
+	// Check QDCOUNT (Question count)
 	// https://datatracker.ietf.org/doc/html/rfc5452#section-4.2
-	if len(respQs) == 0 {
+	qdCount := binary.BigEndian.Uint16(rawResp[4:6])
+	if qdCount == 0 {
 		return errors.New("response had no questions")
 	}
-	respQ := respQs[0]
-	if reqQues.Type != respQ.Type || reqQues.Class != respQ.Class || !equalASCIIName(reqQues.Name, respQ.Name) {
-		return errors.New("response question doesn't match request")
+
+	// Verify the first question echoes exactly our request question.
+	// We construct the expected question name dynamically to avoid allocation.
+	var expectedNameBuf [255]byte
+	expectedName, err := appendName(expectedNameBuf[:0], name)
+	if err != nil {
+		return fmt.Errorf("failed to format expected question name: %w", err)
 	}
 
+	reqQLen := len(expectedName) + 4
+	if len(rawResp) < 12+reqQLen {
+		return errors.New("response too short for echoed question")
+	}
+	
+	respQName := rawResp[12 : 12+len(expectedName)]
+
+	// Case-insensitive comparison, as the server may echo back randomized caps (e.g. 0x20 encoding)
+	for i := 0; i < len(expectedName); i++ {
+		if foldCase(expectedName[i]) != foldCase(respQName[i]) {
+			return fmt.Errorf("response question name doesn't match request. Expected %x, got %x", expectedName, respQName)
+		}
+	}
+	
+	respQType := binary.BigEndian.Uint16(rawResp[12+len(expectedName):])
+	if respQType != qtype {
+		return fmt.Errorf("response question type doesn't match request. Expected %v, got %v", qtype, respQType)
+	}
+	
+	respQClass := binary.BigEndian.Uint16(rawResp[12+len(expectedName)+2:])
+	if respQClass != uint16(dnsmessage.ClassINET) {
+		return fmt.Errorf("response question class doesn't match request. Expected %v, got %v", uint16(dnsmessage.ClassINET), respQClass)
+	}
+	
 	return nil
 }
 
 // queryDatagram implements a DNS query over a datagram protocol.
-func queryDatagram(conn io.ReadWriter, q dnsmessage.Question) (*dnsmessage.Message, error) {
+// It validates the response ID and question echo before returning raw wire-format bytes.
+func queryDatagram(conn io.ReadWriter, name string, qtype uint16, buf []byte) ([]byte, error) {
 	// Reference: https://cs.opensource.google/go/go/+/master:src/net/dnsclient_unix.go?q=func:dnsPacketRoundTrip&ss=go%2Fgo
 	id := uint16(rand.Uint32())
-	buf, err := appendRequest(id, q, make([]byte, 0, maxUDPMessageSize))
+	buf = buf[:0]
+	buf, err := appendRequestRaw(id, name, qtype, buf)
 	if err != nil {
 		return nil, &nestedError{ErrBadRequest, fmt.Errorf("append request failed: %w", err)}
 	}
+
 	if _, err := conn.Write(buf); err != nil {
 		return nil, &nestedError{ErrSend, err}
 	}
@@ -188,27 +325,33 @@ func queryDatagram(conn io.ReadWriter, q dnsmessage.Question) (*dnsmessage.Messa
 		if err != nil {
 			return nil, &nestedError{ErrReceive, errors.Join(returnErr, fmt.Errorf("read message failed: %w", err))}
 		}
-		var msg dnsmessage.Message
-		if err := msg.Unpack(buf[:n]); err != nil {
-			returnErr = errors.Join(returnErr, err)
-			// Ignore invalid packets that fail to parse. It could be injected.
-			continue
-		}
-		if err := checkResponse(id, q, msg.Header, msg.Questions); err != nil {
+		
+		// Ignore invalid packets that fail to parse. It could be injected.
+		if err := checkResponseRaw(id, name, qtype, buf[:n]); err != nil {
 			returnErr = errors.Join(returnErr, err)
 			continue
 		}
-		return &msg, nil
+		
+		return buf[:n], nil
 	}
 }
 
 // queryStream implements a DNS query over a stream protocol. It frames the messages by prepending them with a 2-byte length prefix.
-func queryStream(conn io.ReadWriter, q dnsmessage.Question) (*dnsmessage.Message, error) {
+// It validates the response ID and question echo before returning raw wire-format bytes.
+func queryStream(conn io.ReadWriter, name string, qtype uint16, buf []byte) ([]byte, error) {
 	// Reference: https://cs.opensource.google/go/go/+/master:src/net/dnsclient_unix.go?q=func:dnsStreamRoundTrip&ss=go%2Fgo
 	id := uint16(rand.Uint32())
-	buf, err := appendRequest(id, q, make([]byte, 2, 514))
+	
+	// Pre-allocate 2 bytes for the length prefix, so we don't have to shift later.
+	if cap(buf) < 2 {
+		buf = make([]byte, 2, 514)
+	} else {
+		buf = buf[:2]
+		buf[0], buf[1] = 0, 0
+	}
+	buf, err := appendRequestRaw(id, name, qtype, buf)
 	if err != nil {
-		return nil, &nestedError{ErrBadRequest, fmt.Errorf("append request failed: %w", err)}
+		return nil, &nestedError{ErrBadRequest, err}
 	}
 	// Buffer length must fit in a uint16.
 	if len(buf) > 1<<16-1 {
@@ -234,14 +377,11 @@ func queryStream(conn io.ReadWriter, q dnsmessage.Question) (*dnsmessage.Message
 		return nil, &nestedError{ErrReceive, fmt.Errorf("read message failed: %w", err)}
 	}
 
-	var msg dnsmessage.Message
-	if err = msg.Unpack(buf); err != nil {
-		return nil, &nestedError{ErrBadResponse, fmt.Errorf("response failed to unpack: %w", err)}
-	}
-	if err := checkResponse(id, q, msg.Header, msg.Questions); err != nil {
+	// Ignore invalid packets that fail to parse. It could be injected.
+	if err := checkResponseRaw(id, name, qtype, buf); err != nil {
 		return nil, &nestedError{ErrBadResponse, err}
 	}
-	return &msg, nil
+	return buf, nil
 }
 
 func ensurePort(address string, defaultPort string) string {
@@ -256,13 +396,13 @@ func ensurePort(address string, defaultPort string) string {
 	return address
 }
 
-// NewUDPResolver creates a [Resolver] that implements the DNS-over-UDP protocol, using a [transport.PacketDialer] for transport.
+// NewUDPRawResolver creates a [RawResolver] that implements the DNS-over-UDP protocol, using a [transport.PacketDialer] for transport.
 // It uses a different port for every request.
 //
 // [DNS-over-UDP]: https://datatracker.ietf.org/doc/html/rfc1035#section-4.2.1
-func NewUDPResolver(pd transport.PacketDialer, resolverAddr string) Resolver {
+func NewUDPRawResolver(pd transport.PacketDialer, resolverAddr string) RawResolver {
 	resolverAddr = ensurePort(resolverAddr, "53")
-	return FuncResolver(func(ctx context.Context, q dnsmessage.Question) (*dnsmessage.Message, error) {
+	return FuncRawResolver(func(ctx context.Context, name string, qtype uint16, buf []byte) ([]byte, error) {
 		conn, err := pd.DialPacket(ctx, resolverAddr)
 		if err != nil {
 			return nil, &nestedError{ErrDial, err}
@@ -271,15 +411,23 @@ func NewUDPResolver(pd transport.PacketDialer, resolverAddr string) Resolver {
 		if deadline, ok := ctx.Deadline(); ok {
 			conn.SetDeadline(deadline)
 		}
-		return queryDatagram(conn, q)
+		return queryDatagram(conn, name, qtype, buf)
 	})
 }
 
-type streamResolver struct {
+// NewUDPResolver creates a [Resolver] that implements the DNS-over-UDP protocol, using a [transport.PacketDialer] for transport.
+// It uses a different port for every request.
+//
+// [DNS-over-UDP]: https://datatracker.ietf.org/doc/html/rfc1035#section-4.2.1
+func NewUDPResolver(pd transport.PacketDialer, resolverAddr string) Resolver {
+	return RawToResolver(NewUDPRawResolver(pd, resolverAddr))
+}
+
+type streamRawResolver struct {
 	NewConn func(context.Context) (transport.StreamConn, error)
 }
 
-func (r *streamResolver) Query(ctx context.Context, q dnsmessage.Question) (*dnsmessage.Message, error) {
+func (r *streamRawResolver) QueryRaw(ctx context.Context, name string, qtype uint16, buf []byte) ([]byte, error) {
 	conn, err := r.NewConn(ctx)
 	if err != nil {
 		return nil, &nestedError{ErrDial, err}
@@ -289,7 +437,21 @@ func (r *streamResolver) Query(ctx context.Context, q dnsmessage.Question) (*dns
 	if deadline, ok := ctx.Deadline(); ok {
 		conn.SetDeadline(deadline)
 	}
-	return queryStream(conn, q)
+	return queryStream(conn, name, qtype, buf)
+}
+
+// NewTCPRawResolver creates a [RawResolver] that implements the [DNS-over-TCP] protocol, using a [transport.StreamDialer] for transport.
+// It creates a new connection to the resolver for every request.
+//
+// [DNS-over-TCP]: https://datatracker.ietf.org/doc/html/rfc1035#section-4.2.2
+func NewTCPRawResolver(sd transport.StreamDialer, resolverAddr string) RawResolver {
+	// TODO: Consider handling Authenticated Data.
+	resolverAddr = ensurePort(resolverAddr, "53")
+	return &streamRawResolver{
+		NewConn: func(ctx context.Context) (transport.StreamConn, error) {
+			return sd.DialStream(ctx, resolverAddr)
+		},
+	}
 }
 
 // NewTCPResolver creates a [Resolver] that implements the [DNS-over-TCP] protocol, using a [transport.StreamDialer] for transport.
@@ -297,23 +459,17 @@ func (r *streamResolver) Query(ctx context.Context, q dnsmessage.Question) (*dns
 //
 // [DNS-over-TCP]: https://datatracker.ietf.org/doc/html/rfc1035#section-4.2.2
 func NewTCPResolver(sd transport.StreamDialer, resolverAddr string) Resolver {
-	// TODO: Consider handling Authenticated Data.
-	resolverAddr = ensurePort(resolverAddr, "53")
-	return &streamResolver{
-		NewConn: func(ctx context.Context) (transport.StreamConn, error) {
-			return sd.DialStream(ctx, resolverAddr)
-		},
-	}
+	return RawToResolver(NewTCPRawResolver(sd, resolverAddr))
 }
 
-// NewTLSResolver creates a [Resolver] that implements the [DNS-over-TLS] protocol, using a [transport.StreamDialer]
+// NewTLSRawResolver creates a [RawResolver] that implements the [DNS-over-TLS] protocol, using a [transport.StreamDialer]
 // to connect to the resolverAddr, and the resolverName as the TLS server name.
 // It creates a new connection to the resolver for every request.
 //
 // [DNS-over-TLS]: https://datatracker.ietf.org/doc/html/rfc7858
-func NewTLSResolver(sd transport.StreamDialer, resolverAddr string, resolverName string) Resolver {
+func NewTLSRawResolver(sd transport.StreamDialer, resolverAddr string, resolverName string) RawResolver {
 	resolverAddr = ensurePort(resolverAddr, "853")
-	return &streamResolver{
+	return &streamRawResolver{
 		NewConn: func(ctx context.Context) (transport.StreamConn, error) {
 			baseConn, err := sd.DialStream(ctx, resolverAddr)
 			if err != nil {
@@ -324,12 +480,21 @@ func NewTLSResolver(sd transport.StreamDialer, resolverAddr string, resolverName
 	}
 }
 
-// NewHTTPSResolver creates a [Resolver] that implements the [DNS-over-HTTPS] protocol, using a [transport.StreamDialer]
+// NewTLSResolver creates a [Resolver] that implements the [DNS-over-TLS] protocol, using a [transport.StreamDialer]
+// to connect to the resolverAddr, and the resolverName as the TLS server name.
+// It creates a new connection to the resolver for every request.
+//
+// [DNS-over-TLS]: https://datatracker.ietf.org/doc/html/rfc7858
+func NewTLSResolver(sd transport.StreamDialer, resolverAddr string, resolverName string) Resolver {
+	return RawToResolver(NewTLSRawResolver(sd, resolverAddr, resolverName))
+}
+
+// NewHTTPSRawResolver creates a [RawResolver] that implements the [DNS-over-HTTPS] protocol, using a [transport.StreamDialer]
 // to connect to the resolverAddr, and the url as the DoH template URI.
 // It uses an internal HTTP client that reuses connections when possible.
 //
 // [DNS-over-HTTPS]: https://datatracker.ietf.org/doc/html/rfc8484
-func NewHTTPSResolver(sd transport.StreamDialer, resolverAddr string, url string) Resolver {
+func NewHTTPSRawResolver(sd transport.StreamDialer, resolverAddr string, url string) RawResolver {
 	resolverAddr = ensurePort(resolverAddr, "443")
 	dialContext := func(ctx context.Context, network, addr string) (net.Conn, error) {
 		if !strings.HasPrefix(network, "tcp") {
@@ -352,12 +517,15 @@ func NewHTTPSResolver(sd transport.StreamDialer, resolverAddr string, url string
 			ResponseHeaderTimeout: 20 * time.Second, // Same value as Android DNS-over-TLS
 		},
 	}
-	return FuncResolver(func(ctx context.Context, q dnsmessage.Question) (*dnsmessage.Message, error) {
+	return FuncRawResolver(func(ctx context.Context, name string, qtype uint16, buf []byte) ([]byte, error) {
 		// Prepare request.
-		buf, err := appendRequest(0, q, make([]byte, 0, 512))
+		// DoH uses ID=0 per RFC 8484.
+		buf = buf[:0]
+		buf, err := appendRequestRaw(0, name, qtype, buf)
 		if err != nil {
-			return nil, &nestedError{ErrBadRequest, fmt.Errorf("append request failed: %w", err)}
+			return nil, &nestedError{ErrBadRequest, err}
 		}
+
 		httpReq, err := http.NewRequestWithContext(ctx, "POST", url, bytes.NewBuffer(buf))
 		if err != nil {
 			return nil, &nestedError{ErrBadRequest, fmt.Errorf("create HTTP request failed: %w", err)}
@@ -375,19 +543,49 @@ func NewHTTPSResolver(sd transport.StreamDialer, resolverAddr string, url string
 		if httpResp.StatusCode != http.StatusOK {
 			return nil, &nestedError{ErrReceive, fmt.Errorf("got HTTP status %v", httpResp.StatusCode)}
 		}
-		response, err := io.ReadAll(httpResp.Body)
+		buf, err = readAllInto(httpResp.Body, buf, httpResp.ContentLength)
 		if err != nil {
 			return nil, &nestedError{ErrReceive, fmt.Errorf("failed to read response: %w", err)}
 		}
 
 		// Process response.
-		var msg dnsmessage.Message
-		if err = msg.Unpack(response); err != nil {
-			return nil, &nestedError{ErrBadResponse, fmt.Errorf("failed to unpack DNS response: %w", err)}
-		}
-		if err := checkResponse(0, q, msg.Header, msg.Questions); err != nil {
+		// Ignore invalid packets that fail to parse. It could be injected.
+		if err := checkResponseRaw(0, name, qtype, buf); err != nil {
 			return nil, &nestedError{ErrBadResponse, err}
 		}
-		return &msg, nil
+		return buf, nil
 	})
+}
+
+// readAllInto reads everything from r into buf, reusing its capacity.
+// It pre-grows the buffer if expectedSize is known and reasonable for DNS.
+func readAllInto(r io.Reader, buf []byte, expectedSize int64) ([]byte, error) {
+	buf = buf[:0]
+	// Pre-grow buffer if we know the size and it's reasonable for DNS (< 64KB).
+	if expectedSize > 0 && expectedSize <= 65535 && int64(cap(buf)) < expectedSize {
+		buf = make([]byte, 0, expectedSize)
+	}
+	for {
+		if len(buf) == cap(buf) {
+			buf = append(buf, 0)[:len(buf)]
+		}
+		n, err := r.Read(buf[len(buf):cap(buf)])
+		buf = buf[:len(buf)+n]
+		if err != nil {
+			if err == io.EOF {
+				break
+			}
+			return buf, err
+		}
+	}
+	return buf, nil
+}
+
+// NewHTTPSResolver creates a [Resolver] that implements the [DNS-over-HTTPS] protocol, using a [transport.StreamDialer]
+// to connect to the resolverAddr, and the url as the DoH template URI.
+// It uses an internal HTTP client that reuses connections when possible.
+//
+// [DNS-over-HTTPS]: https://datatracker.ietf.org/doc/html/rfc8484
+func NewHTTPSResolver(sd transport.StreamDialer, resolverAddr string, url string) Resolver {
+	return RawToResolver(NewHTTPSRawResolver(sd, resolverAddr, url))
 }
