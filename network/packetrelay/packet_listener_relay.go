@@ -43,7 +43,6 @@ var _ PacketReceiver = (*packetListenerReceiver)(nil)
 // PacketListenerRelay creates a new [PacketRelay] that uses the existing [transport.PacketListener] to
 // create connections to a relay.
 type PacketListenerRelay struct {
-	mu               sync.RWMutex
 	listener         transport.PacketListener
 	writeIdleTimeout time.Duration
 }
@@ -52,9 +51,7 @@ type PacketListenerRelay struct {
 // create connections to a relay.
 // This function is useful if you already have an implementation of [transport.PacketListener] and you want to use it
 // with one of the network stacks (for example, network/lwip2transport) as a UDP traffic handler.
-//
-// Associations use a write-idle timeout that is reset only by [PacketSender.SendPacket], not by
-// incoming packets.
+// The writeIdleTimeout is reset only by [PacketSender.SendPacket], not by incoming packets.
 func NewPacketRelayFromPacketListener(pl transport.PacketListener, writeIdleTimeout time.Duration) (*PacketListenerRelay, error) {
 	if pl == nil {
 		return nil, errors.New("pl must not be nil")
@@ -69,34 +66,17 @@ func NewPacketRelayFromPacketListener(pl transport.PacketListener, writeIdleTime
 	return r, nil
 }
 
-// SetWriteIdleTimeout sets the write-idle timeout for new associations.
-// Existing associations keep the timeout they were created with.
-func (relay *PacketListenerRelay) SetWriteIdleTimeout(timeout time.Duration) error {
-	if timeout <= 0 {
-		return errors.New("timeout must be greater than 0")
-	}
-	relay.mu.Lock()
-	defer relay.mu.Unlock()
-	relay.writeIdleTimeout = timeout
-	return nil
-}
-
 // NewAssociation implements [PacketRelay].NewAssociation. It uses [transport.PacketListener].ListenPacket to create
 // a [net.PacketConn], and returns a [PacketSender] and [PacketReceiver] based on this [net.PacketConn].
 func (relay *PacketListenerRelay) NewAssociation() (PacketSender, PacketReceiver, error) {
-	relay.mu.RLock()
-	listener := relay.listener
-	writeIdleTimeout := relay.writeIdleTimeout
-	relay.mu.RUnlock()
-
-	packetConn, err := listener.ListenPacket(context.Background())
+	packetConn, err := relay.listener.ListenPacket(context.Background())
 	if err != nil {
 		return nil, nil, err
 	}
 
 	association := &packetListenerAssociation{
 		packetConn:       packetConn,
-		writeIdleTimeout: writeIdleTimeout,
+		writeIdleTimeout: relay.writeIdleTimeout,
 	}
 	if err := association.refreshDeadline(); err != nil {
 		_ = association.close()
