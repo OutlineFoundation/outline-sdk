@@ -15,6 +15,7 @@
 package dns
 
 import (
+	"context"
 	"encoding/binary"
 	"errors"
 	"fmt"
@@ -204,13 +205,33 @@ type queryResult struct {
 	err error
 }
 
+// testDatagramResolver returns a [Resolver] that exchanges messages over conn as datagrams.
+func testDatagramResolver(conn io.ReadWriter) Resolver {
+	return resolverFromExchanger(FuncExchanger(func(ctx context.Context, query []byte) ([]byte, error) {
+		info, err := parseQuery(query)
+		if err != nil {
+			return nil, &nestedError{ErrBadRequest, err}
+		}
+		return exchangeDatagram(conn, query, info)
+	}), randomID)
+}
+
+// testStreamResolver returns a [Resolver] that exchanges length-prefixed messages over conn.
+func testStreamResolver(conn io.ReadWriter) Resolver {
+	return resolverFromExchanger(FuncExchanger(func(ctx context.Context, query []byte) ([]byte, error) {
+		return exchangeStream(conn, query)
+	}), randomID)
+}
+
+// testDatagramExchange runs a query against a fake datagram server, exercising the structured
+// resolver on top of the wire-format datagram exchange.
 func testDatagramExchange(t *testing.T, server func(request dnsmessage.Message, conn net.Conn)) (*dnsmessage.Message, error) {
 	front, back := net.Pipe()
 	q, err := NewQuestion("example.com.", dnsmessage.TypeAAAA)
 	require.NoError(t, err)
 	clientDone := make(chan queryResult)
 	go func() {
-		msg, err := queryDatagram(front, *q)
+		msg, err := testDatagramResolver(front).Query(context.Background(), *q)
 		clientDone <- queryResult{msg, err}
 	}()
 	// Read request.
@@ -232,7 +253,7 @@ func testDatagramExchange(t *testing.T, server func(request dnsmessage.Message, 
 	return result.msg, result.err
 }
 
-func Test_queryDatagram(t *testing.T) {
+func TestDatagramExchange(t *testing.T) {
 	t.Run("Success", func(t *testing.T) {
 		var respSent dnsmessage.Message
 		respRcvd, err := testDatagramExchange(t, func(req dnsmessage.Message, conn net.Conn) {
@@ -281,7 +302,7 @@ func Test_queryDatagram(t *testing.T) {
 		require.NoError(t, err)
 		clientDone := make(chan queryResult)
 		go func() {
-			msg, err := queryDatagram(front, *q)
+			msg, err := testDatagramResolver(front).Query(context.Background(), *q)
 			clientDone <- queryResult{msg, err}
 		}()
 		// Wait for queryDatagram.
@@ -295,7 +316,7 @@ func Test_queryDatagram(t *testing.T) {
 		require.NoError(t, err)
 		clientDone := make(chan queryResult)
 		go func() {
-			msg, err := queryDatagram(front, *q)
+			msg, err := testDatagramResolver(front).Query(context.Background(), *q)
 			clientDone <- queryResult{msg, err}
 		}()
 		back.Read(make([]byte, 521))
@@ -313,7 +334,7 @@ func testStreamExchange(t *testing.T, server func(request dnsmessage.Message, co
 	require.NoError(t, err)
 	clientDone := make(chan queryResult)
 	go func() {
-		msg, err := queryStream(front, *q)
+		msg, err := testStreamResolver(front).Query(context.Background(), *q)
 		clientDone <- queryResult{msg, err}
 	}()
 	// Read request.
@@ -337,7 +358,7 @@ func testStreamExchange(t *testing.T, server func(request dnsmessage.Message, co
 	return result.msg, result.err
 }
 
-func Test_queryStream(t *testing.T) {
+func TestStreamExchange(t *testing.T) {
 	t.Run("Success", func(t *testing.T) {
 		var respSent dnsmessage.Message
 		respRcvd, err := testStreamExchange(t, func(req dnsmessage.Message, conn net.Conn) {
@@ -416,7 +437,7 @@ func Test_queryStream(t *testing.T) {
 		require.NoError(t, err)
 		clientDone := make(chan queryResult)
 		go func() {
-			msg, err := queryStream(front, *q)
+			msg, err := testStreamResolver(front).Query(context.Background(), *q)
 			clientDone <- queryResult{msg, err}
 		}()
 		// Wait for client.
@@ -430,7 +451,7 @@ func Test_queryStream(t *testing.T) {
 		require.NoError(t, err)
 		clientDone := make(chan queryResult)
 		go func() {
-			msg, err := queryStream(front, *q)
+			msg, err := testStreamResolver(front).Query(context.Background(), *q)
 			clientDone <- queryResult{msg, err}
 		}()
 		back.Read(make([]byte, 521))
