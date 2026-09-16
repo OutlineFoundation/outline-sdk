@@ -179,7 +179,7 @@ func testDNSResolver(baseCtx context.Context, oneTestTimeout time.Duration, reso
 	}
 	ctxA, cancelA := context.WithTimeout(baseCtx, oneTestTimeout)
 	defer cancelA()
-	response, err := resolver.Query(ctxA, *q)
+	response, err := resolver.Query(ctxA, q)
 	if err != nil {
 		return nil, fmt.Errorf("request for A query failed: %w", err)
 	}
@@ -205,7 +205,7 @@ func testDNSResolver(baseCtx context.Context, oneTestTimeout time.Duration, reso
 	}
 	ctxCNAME, cancelCNAME := context.WithTimeout(baseCtx, oneTestTimeout)
 	defer cancelCNAME()
-	response, err = resolver.Query(ctxCNAME, *q)
+	response, err = resolver.Query(ctxCNAME, q)
 	if err != nil {
 		return nil, fmt.Errorf("request for CNAME query failed: %w", err)
 	}
