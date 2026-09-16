@@ -15,10 +15,35 @@
 package main
 
 import (
+	"bytes"
+	"errors"
+	"net"
 	"testing"
+	"time"
 
 	"github.com/quic-go/quic-go"
 )
+
+type recordingPacketConn struct {
+	packets [][]byte
+	addrs   []net.Addr
+}
+
+func (c *recordingPacketConn) ReadFrom([]byte) (int, net.Addr, error) {
+	return 0, nil, errors.New("not implemented")
+}
+
+func (c *recordingPacketConn) WriteTo(p []byte, addr net.Addr) (int, error) {
+	c.packets = append(c.packets, bytes.Clone(p))
+	c.addrs = append(c.addrs, addr)
+	return len(p), nil
+}
+
+func (*recordingPacketConn) Close() error                     { return nil }
+func (*recordingPacketConn) LocalAddr() net.Addr              { return &net.UDPAddr{} }
+func (*recordingPacketConn) SetDeadline(time.Time) error      { return nil }
+func (*recordingPacketConn) SetReadDeadline(time.Time) error  { return nil }
+func (*recordingPacketConn) SetWriteDeadline(time.Time) error { return nil }
 
 func TestParseQUICVersions(t *testing.T) {
 	tests := []struct {
@@ -51,5 +76,111 @@ func TestParseQUICVersions(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+func TestQUICPreludeConfigValidate(t *testing.T) {
+	tests := []struct {
+		name    string
+		config  quicPreludeConfig
+		wantErr bool
+	}{
+		{name: "disabled", config: quicPreludeConfig{count: 0}},
+		{name: "negative count", config: quicPreludeConfig{count: -1}, wantErr: true},
+		{name: "random", config: quicPreludeConfig{count: 1, mode: quicPreludeRandom, size: 1}},
+		{name: "random empty", config: quicPreludeConfig{count: 1, mode: quicPreludeRandom}, wantErr: true},
+		{name: "v1 shaped", config: quicPreludeConfig{count: 1, mode: quicPreludeV1Invalid, size: 1200}},
+		{name: "v2 shaped", config: quicPreludeConfig{count: 1, mode: quicPreludeV2Invalid, size: 1200}},
+		{name: "shaped too short", config: quicPreludeConfig{count: 1, mode: quicPreludeV2Invalid, size: 1199}, wantErr: true},
+		{name: "valid v2", config: quicPreludeConfig{count: 1, mode: quicPreludeValidV2, sni: "www.google.com", attemptTimeout: time.Second}},
+		{name: "valid v2 missing sni", config: quicPreludeConfig{count: 1, mode: quicPreludeValidV2, attemptTimeout: time.Second}, wantErr: true},
+		{name: "valid v2 missing timeout", config: quicPreludeConfig{count: 1, mode: quicPreludeValidV2, sni: "www.google.com"}, wantErr: true},
+		{name: "unknown mode", config: quicPreludeConfig{count: 1, mode: "unknown", size: 1200}, wantErr: true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if err := tt.config.validate(); (err != nil) != tt.wantErr {
+				t.Fatalf("validate() error = %v, wantErr %v", err, tt.wantErr)
+			}
+		})
+	}
+}
+
+func TestQUICPreludeConfigBudget(t *testing.T) {
+	tests := []struct {
+		name   string
+		config quicPreludeConfig
+		want   time.Duration
+	}{
+		{name: "disabled", config: quicPreludeConfig{count: 0, mode: quicPreludeValidV2, attemptTimeout: 3 * time.Second}},
+		{name: "raw modes are immediate", config: quicPreludeConfig{count: 4, mode: quicPreludeV2Invalid, size: 1200, attemptTimeout: 3 * time.Second}},
+		{name: "valid v2 reserves every attempt", config: quicPreludeConfig{count: 2, mode: quicPreludeValidV2, sni: "www.google.com", attemptTimeout: 3 * time.Second}, want: 6 * time.Second},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := tt.config.budget(); got != tt.want {
+				t.Fatalf("budget() = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestQUICShapedInvalidInitial(t *testing.T) {
+	tests := []struct {
+		name          string
+		version       quic.Version
+		initialType   byte
+		versionNumber uint32
+	}{
+		{name: "v1", version: quic.Version1, initialType: 0x00, versionNumber: uint32(quic.Version1)},
+		{name: "v2", version: quic.Version2, initialType: 0x10, versionNumber: uint32(quic.Version2)},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			packet, err := quicShapedInvalidInitial(tt.version, 1200)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(packet) != 1200 {
+				t.Fatalf("length = %d, want 1200", len(packet))
+			}
+			if packet[0]&0xc0 != 0xc0 {
+				t.Fatalf("first byte %#x does not set long-header and fixed bits", packet[0])
+			}
+			if got := packet[0] & 0x30; got != tt.initialType {
+				t.Fatalf("long packet type = %#x, want %#x", got, tt.initialType)
+			}
+			gotVersion := uint32(packet[1])<<24 | uint32(packet[2])<<16 | uint32(packet[3])<<8 | uint32(packet[4])
+			if gotVersion != tt.versionNumber {
+				t.Fatalf("version = %#x, want %#x", gotVersion, tt.versionNumber)
+			}
+			if packet[5] != 8 || packet[14] != 8 || packet[23] != 0 {
+				t.Fatalf("unexpected connection ID or token lengths: dcid=%d scid=%d token=%d", packet[5], packet[14], packet[23])
+			}
+			gotLength := int(packet[24]&0x3f)<<8 | int(packet[25])
+			if want := len(packet) - 26; gotLength != want {
+				t.Fatalf("protected length = %d, want %d", gotLength, want)
+			}
+		})
+	}
+}
+
+func TestSendDatagramPreludes(t *testing.T) {
+	destination := &net.UDPAddr{IP: net.IPv4(192, 0, 2, 1), Port: 443}
+	conn := &recordingPacketConn{}
+	config := quicPreludeConfig{count: 4, mode: quicPreludeV2Invalid, size: 1200}
+	if err := sendDatagramPreludes(conn, destination, config); err != nil {
+		t.Fatal(err)
+	}
+	if len(conn.packets) != config.count {
+		t.Fatalf("sent %d datagrams, want %d", len(conn.packets), config.count)
+	}
+	for i, packet := range conn.packets {
+		if len(packet) != config.size {
+			t.Errorf("datagram %d length = %d, want %d", i+1, len(packet), config.size)
+		}
+		if conn.addrs[i] != destination {
+			t.Errorf("datagram %d destination = %v, want %v", i+1, conn.addrs[i], destination)
+		}
 	}
 }
