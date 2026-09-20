@@ -7,7 +7,7 @@
   "devDependencies": {
     "concurrently": "^8.2.0",
     "typescript": "^4.6.4",
-    "vite": "^3.0.7"
+    "vite": "^5.4.20"
   },
   "name": "app_desktop",
   "scripts": {
