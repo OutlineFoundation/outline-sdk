@@ -47,7 +47,7 @@ func RegisterDefaultProviders(c *ProviderContainer) *ProviderContainer {
 	registerDOHStreamDialer(&c.StreamDialers, "doh", c.StreamDialers.NewInstance)
 
 	registerH2ConnectStreamDialer(&c.StreamDialers, "h2connect", c.StreamDialers.NewInstance)
-	registerH3ConnectStreamDialer(&c.StreamDialers, "h3connect")
+	registerH3ConnectStreamDialer(&c.StreamDialers, "h3connect", c.PacketListeners.NewInstance)
 	registerHTTPConnectStreamDialer(&c.StreamDialers, "httpconnect", c.StreamDialers.NewInstance)
 
 	registerOverrideStreamDialer(&c.StreamDialers, "override", c.StreamDialers.NewInstance)

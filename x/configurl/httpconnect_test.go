@@ -17,6 +17,7 @@ package configurl_test
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net"
 	"net/http"
@@ -89,4 +90,54 @@ func Test_H2Connect_H2C(t *testing.T) {
 	var got Response
 	require.NoError(t, json.NewDecoder(resp.Body).Decode(&got))
 	require.Equal(t, want, got)
+}
+
+// recordingPacketListener is a [transport.PacketListener] that records whether ListenPacket was called.
+type recordingPacketListener struct {
+	listenCalled bool
+	conn         net.PacketConn
+}
+
+func (l *recordingPacketListener) ListenPacket(ctx context.Context) (net.PacketConn, error) {
+	l.listenCalled = true
+	return l.conn, nil
+}
+
+// Test_H3Connect_UsesBasePacketListener verifies that h3connect runs QUIC over the
+// packet listener built from the element on its left, instead of ignoring it.
+func Test_H3Connect_UsesBasePacketListener(t *testing.T) {
+	t.Parallel()
+
+	// A loopback socket, so no packets leave the machine. Building the dialer doesn't send any.
+	conn, err := net.ListenPacket("udp", "127.0.0.1:0")
+	require.NoError(t, err)
+	t.Cleanup(func() { conn.Close() })
+
+	pl := &recordingPacketListener{conn: conn}
+	var gotConfig *configurl.Config
+	providers := configurl.NewDefaultProviders()
+	providers.PacketListeners.RegisterType("fake", func(ctx context.Context, config *configurl.Config) (transport.PacketListener, error) {
+		gotConfig = config
+		return pl, nil
+	})
+
+	dialer, err := providers.NewStreamDialer(context.Background(), "fake://base|h3connect://proxy.example:443")
+	require.NoError(t, err)
+	require.NotNil(t, dialer)
+	require.NotNil(t, gotConfig, "base packet listener was not built")
+	require.Equal(t, "fake://base", gotConfig.URL.String())
+	require.True(t, pl.listenCalled, "ListenPacket was not called on the base packet listener")
+}
+
+// Test_H3Connect_BasePacketListenerError verifies that errors from the base packet listener are propagated.
+func Test_H3Connect_BasePacketListenerError(t *testing.T) {
+	t.Parallel()
+
+	providers := configurl.NewDefaultProviders()
+	providers.PacketListeners.RegisterType("fail", func(ctx context.Context, config *configurl.Config) (transport.PacketListener, error) {
+		return nil, errors.New("fail listener")
+	})
+
+	_, err := providers.NewStreamDialer(context.Background(), "fail:|h3connect://proxy.example:443")
+	require.ErrorContains(t, err, "fail listener")
 }
