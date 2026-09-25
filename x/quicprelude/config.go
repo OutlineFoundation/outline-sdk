@@ -18,6 +18,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"net"
 	"sync"
 
@@ -63,6 +64,10 @@ func (c *Config) WithGenerator(generator Generator) *Config {
 // The prelude is written to the same connection as the traffic that follows,
 // so both share a four-tuple by construction. That is the property the
 // technique depends on: a middlebox keying on the flow must see them as one.
+// On Linux, macOS, FreeBSD and Windows, connections that support UDP socket
+// control and message I/O retain those capabilities. Both WriteTo and
+// WriteMsgUDP inject preludes; UDP segmentation batches without a qualifying
+// Initial pass through unchanged.
 func (c *Config) NewPacketListener(inner transport.PacketListener) (transport.PacketListener, error) {
 	if inner == nil {
 		return nil, errors.New("quicprelude: inner listener must not be nil")
@@ -84,7 +89,7 @@ func (l *packetListener) ListenPacket(ctx context.Context) (net.PacketConn, erro
 	if err != nil {
 		return nil, err
 	}
-	return &preludeConn{PacketConn: conn, generator: l.generator}, nil
+	return wrapPacketConn(&preludeConn{PacketConn: conn, generator: l.generator}), nil
 }
 
 // preludeConn sends the prelude before every datagram that may carry a QUIC
@@ -98,48 +103,51 @@ func (l *packetListener) ListenPacket(ctx context.Context) (net.PacketConn, erro
 // and before some Initials that only acknowledge the server's. See
 // [mayCarryClientHello] for which datagrams qualify.
 //
-// Embedding net.PacketConn as an interface deliberately exposes only its
-// methods, even when the inner connection is a *net.UDPConn. QUIC-Go v0.48.1
-// probes for SyscallConn, SetReadBuffer, ReadMsgUDP and WriteMsgUDP to select
-// its optimized UDP path on supported platforms. Without that interface it
-// sends through WriteTo, which is where this wrapper injects the prelude.
-// Forwarding WriteMsgUDP unchanged would bypass injection: the QUIC handshake
-// could still succeed while the prelude is silently omitted. Any additional
-// send method must inject the prelude before forwarding the original packet.
-//
-// This implementation gives up UDP segmentation offload, ECN and QUIC-Go's
-// socket-buffer tuning and DF setup for path MTU discovery where supported.
-// Those optimizations can be restored by conditionally exposing the inner
-// connection's capabilities and intercepting the optimized send path as well.
+// Only net.PacketConn is embedded: extra send methods must explicitly inject
+// preludes, as preludeUDPConn.WriteMsgUDP does. Promoting an inner UDPConn's
+// methods would expose writes that bypass this wrapper.
 type preludeConn struct {
 	net.PacketConn
 
 	generator Generator
 
-	// mu keeps a prelude adjacent to the packet it precedes when several
-	// goroutines write ClientHellos at once, and means a Generator is never called
-	// concurrently.
+	// mu serializes both write APIs, including non-Initial writes, so a prelude
+	// stays adjacent to its packet and the generator is never called concurrently.
 	mu sync.Mutex
 }
 
 // WriteTo sends the prelude datagrams if p may carry a ClientHello, then writes
 // p.
 func (c *preludeConn) WriteTo(p []byte, addr net.Addr) (int, error) {
-	if !mayCarryClientHello(p) {
-		return c.PacketConn.WriteTo(p, addr)
-	}
-
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
-	datagrams, err := c.generator(GeneratorInput{Packet: p, Destination: addr})
-	if err != nil {
-		return 0, fmt.Errorf("quicprelude: build prelude: %w", err)
-	}
-	for i, datagram := range datagrams {
-		if _, err := c.PacketConn.WriteTo(datagram, addr); err != nil {
-			return 0, fmt.Errorf("quicprelude: send datagram %d: %w", i+1, err)
-		}
+	if err := c.writePrelude(p, addr, func(datagram []byte) (int, error) {
+		return c.PacketConn.WriteTo(datagram, addr)
+	}); err != nil {
+		return 0, err
 	}
 	return c.PacketConn.WriteTo(p, addr)
+}
+
+// writePrelude requires mu to be held. write must use the inner connection,
+// preserving the original write's destination and any source-routing metadata.
+func (c *preludeConn) writePrelude(p []byte, addr net.Addr, write func([]byte) (int, error)) error {
+	if !mayCarryClientHello(p) {
+		return nil
+	}
+	datagrams, err := c.generator(GeneratorInput{Packet: p, Destination: addr})
+	if err != nil {
+		return fmt.Errorf("quicprelude: build prelude: %w", err)
+	}
+	for i, datagram := range datagrams {
+		n, err := write(datagram)
+		if err == nil && n != len(datagram) {
+			err = io.ErrShortWrite
+		}
+		if err != nil {
+			return fmt.Errorf("quicprelude: send datagram %d: %w", i+1, err)
+		}
+	}
+	return nil
 }
