@@ -338,13 +338,37 @@ func TestFixedVersionRejectsZero(t *testing.T) {
 	require.Error(t, err)
 }
 
+func TestInvalidInitialChoosesVersionForEachDatagram(t *testing.T) {
+	versions := []uint32{Version1, Version2}
+	calls := 0
+	generator, err := InvalidInitial(func() uint32 {
+		require.Less(t, calls, len(versions), "one version choice per datagram")
+		version := versions[calls]
+		calls++
+		return version
+	}, DefaultLength)
+	require.NoError(t, err)
+	generator, err = Repeat(2, generator)
+	require.NoError(t, err)
+	require.Zero(t, calls, "construction must not consume a version")
+
+	datagrams := generateFor(t, generator, make([]byte, DefaultLength))
+	require.Len(t, datagrams, 2)
+	require.Equal(t, 2, calls)
+	version, packetType := requireLongHeader(t, datagrams[0], DefaultLength)
+	require.Equal(t, Version1, version)
+	require.Equal(t, byte(0x00), packetType)
+	version, packetType = requireLongHeader(t, datagrams[1], DefaultLength)
+	require.Equal(t, Version2, version)
+	require.Equal(t, byte(0x10), packetType)
+}
+
 func TestRandomDraftVersionStaysAboveAssignedDrafts(t *testing.T) {
 	source := RandomDraftVersion()
 
 	seen := map[uint32]int{}
 	for range 512 {
-		version, err := source()
-		require.NoError(t, err)
+		version := source()
 		require.Equal(t, draftPrefix, version&0xffffff00, "%#08x is outside the draft range", version)
 		// draft-34 became RFC 9000. At or below it the codepoints saw
 		// deployment, which is what filtering recognizes: the Iranian paths

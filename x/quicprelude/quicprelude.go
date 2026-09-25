@@ -170,25 +170,21 @@ func Random(length int) (Generator, error) {
 		if n == 0 {
 			n = DefaultLength
 		}
-		datagram, err := randomBytes(n)
-		if err != nil {
-			return nil, err
-		}
-		return [][]byte{datagram}, nil
+		return [][]byte{randomBytes(n)}, nil
 	}, nil
 }
 
 // VersionSource chooses the version codepoint for a datagram. It is called once
 // per datagram, so a source that varies produces datagrams that differ on the
 // wire and gives a middlebox no single constant to match.
-type VersionSource func() (uint32, error)
+type VersionSource func() uint32
 
 // FixedVersion returns a [VersionSource] that always yields version.
 func FixedVersion(version uint32) (VersionSource, error) {
 	if version == 0 {
 		return nil, fmt.Errorf("version must not be zero, which denotes Version Negotiation")
 	}
-	return func() (uint32, error) { return version, nil }, nil
+	return func() uint32 { return version }, nil
 }
 
 // RandomReservedVersion returns a [VersionSource] yielding a fresh codepoint
@@ -200,15 +196,13 @@ func FixedVersion(version uint32) (VersionSource, error) {
 // This is the default. The range holds 65536 values, none of which can collide
 // with an assigned version, since it is reserved.
 func RandomReservedVersion() VersionSource {
-	return func() (uint32, error) {
+	return func() uint32 {
 		var b [4]byte
-		if _, err := rand.Read(b[:]); err != nil {
-			return 0, fmt.Errorf("choose reserved version: %w", err)
-		}
+		rand.Read(b[:])
 		for i := range b {
 			b[i] = b[i]&0xf0 | reservedNibble
 		}
-		return binary.BigEndian.Uint32(b[:]), nil
+		return binary.BigEndian.Uint32(b[:])
 	}
 }
 
@@ -226,13 +220,11 @@ func RandomReservedVersion() VersionSource {
 // This is an alternative to [RandomReservedVersion] for a path where the
 // reserved range is filtered. It is a smaller pool.
 func RandomDraftVersion() VersionSource {
-	return func() (uint32, error) {
+	return func() uint32 {
 		var b [1]byte
-		if _, err := rand.Read(b[:]); err != nil {
-			return 0, fmt.Errorf("choose draft version: %w", err)
-		}
+		rand.Read(b[:])
 		span := 0xff - lastAssignedDraft
-		return draftPrefix | uint32(lastAssignedDraft+1+int(b[0])%span), nil
+		return draftPrefix | uint32(lastAssignedDraft+1+int(b[0])%span)
 	}
 }
 
@@ -254,14 +246,7 @@ func InvalidInitial(version VersionSource, length int) (Generator, error) {
 		}
 	}
 	return func(input GeneratorInput) ([][]byte, error) {
-		chosen, err := version()
-		if err != nil {
-			return nil, err
-		}
-		datagram, err := invalidInitial(chosen, lengthFor(length, input.Packet, DefaultLength))
-		if err != nil {
-			return nil, err
-		}
+		datagram := invalidInitial(version(), lengthFor(length, input.Packet, DefaultLength))
 		return [][]byte{datagram}, nil
 	}, nil
 }
@@ -328,19 +313,14 @@ func ValidateInitialLength(length int) error {
 	return nil
 }
 
-func randomBytes(length int) ([]byte, error) {
+func randomBytes(length int) []byte {
 	p := make([]byte, length)
-	if _, err := rand.Read(p); err != nil {
-		return nil, fmt.Errorf("generate random datagram: %w", err)
-	}
-	return p, nil
+	rand.Read(p)
+	return p
 }
 
-func invalidInitial(version uint32, length int) ([]byte, error) {
-	p, err := randomBytes(length)
-	if err != nil {
-		return nil, err
-	}
+func invalidInitial(version uint32, length int) []byte {
+	p := randomBytes(length)
 
 	// Header Form and Fixed Bit are set. The long packet type encodes Initial,
 	// which is 0b00 in QUIC v1 and 0b01 in QUIC v2. For any other version the
@@ -362,5 +342,5 @@ func invalidInitial(version uint32, length int) ([]byte, error) {
 
 	// Two-byte QUIC varint for the length of the protected remainder.
 	binary.BigEndian.PutUint16(p[24:26], uint16(length-headerLength)|(1<<14))
-	return p, nil
+	return p
 }
