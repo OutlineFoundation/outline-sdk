@@ -71,11 +71,12 @@ For h2connect, plain=true enables h2c (cleartext HTTP/2 without TLS).
 Proxy authentication is supported in two ways:
 
   - URL userinfo (user:password@host) generates a Proxy-Authorization: Basic header.
+
   - For other schemes such as Bearer the auth parameter sets the Proxy-Authorization header value directly.
 
-	httpconnect://[USER:PASS@][HOST]:[PORT][?sni=SNI][&certname=CERTNAME][&auth=TOKEN]
-	h2connect://[USER:PASS@][HOST]:[PORT][?sni=SNI][&certname=CERTNAME][&auth=TOKEN][&plain=true]
-	h3connect://[USER:PASS@][HOST]:[PORT][?sni=SNI][&certname=CERTNAME][&auth=TOKEN]
+    httpconnect://[USER:PASS@][HOST]:[PORT][?sni=SNI][&certname=CERTNAME][&auth=TOKEN]
+    h2connect://[USER:PASS@][HOST]:[PORT][?sni=SNI][&certname=CERTNAME][&auth=TOKEN][&plain=true]
+    h3connect://[USER:PASS@][HOST]:[PORT][?sni=SNI][&certname=CERTNAME][&auth=TOKEN]
 
 # Transports
 
@@ -133,6 +134,40 @@ If LENGTH<0, the two fragments will be of size len(payload)-LENGTH and LENGTH re
 For more details, refer to [golang.getoutline.org/sdk/transport/tlsfrag].
 
 	tlsfrag:[LENGTH]
+
+QUIC prelude (packet listeners only, package [golang.getoutline.org/sdk/x/quicprelude])
+
+Sends datagrams ahead of every packet that may carry a QUIC ClientHello, on the
+same socket and therefore the same four-tuple. Other traffic passes unchanged. A
+middlebox that reads the TLS Server Name Indication from the first QUIC Initial
+it can parse on a flow, and caches that verdict for the flow, finds no name in
+an Initial it cannot decrypt.
+
+	quicprelude:count=[COUNT]&mode=[MODE]&length=[LENGTH]&version=[VERSION]
+
+Every option may be omitted, and the defaults are the ones to reach for first:
+one Initial-shaped datagram carrying a reserved version codepoint, sized to
+match the packet it precedes.
+
+	count    number of datagrams, at most 16; 0 disables the prelude (default 1)
+	mode     invalid-initial or random (default invalid-initial)
+	length   match, or a byte count (default match)
+	version  reserved, draft, v1, v2, or a 32-bit hex codepoint (default reserved)
+
+length=match sizes each datagram like the packet it precedes, so the prelude is
+not separable from it by size. Only datagrams of at least 1200 bytes, the
+smallest RFC 9000 allows a client to send an Initial in, get a prelude, so a
+matched prelude is always a valid Initial size.
+
+version names a range to draw a fresh codepoint from for every datagram, so no
+single constant identifies the prelude. reserved uses 0x?a?a?a?a, which RFC 9000
+sets aside for forcing version negotiation; draft uses the IETF draft range
+above the draft numbers that were ever assigned.
+
+The range matters: measurements found that a codepoint no implementation would
+recognize is ignored rather than acted on, which defeats the technique. An
+assigned draft such as draft-29 is worse still, being dropped outright on the
+Iranian paths measured, which is why draft selection stays above them.
 
 Packet reordering (streams only, package [golang.getoutline.org/sdk/x/disorder])
 

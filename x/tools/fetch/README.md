@@ -13,6 +13,40 @@ The tool logs the negotiated QUIC version and wire codepoint after a successful
 HTTP/3 request. Use `1,2` (the default) to prefer v1, or `2,1` to prefer v2
 while allowing fallback through version negotiation.
 
+### QUIC preludes
+
+Preludes are configured through `-transport`, not through dedicated flags, so
+they compose with the rest of the transport stack. The `quicprelude` type sends
+datagrams ahead of every packet that may carry a QUIC ClientHello, on the same
+socket and therefore the same four-tuple:
+
+```console
+fetch -proto h3 -quic-versions 1 -method HEAD -v \
+  -transport 'quicprelude:count=1&version=0x1a2a3a4a' https://example.com/
+```
+
+Every option may be omitted, and a bare `quicprelude` is the configuration to
+reach for first:
+
+| Option | Default | Meaning |
+|---|---|---|
+| `count` | `1` | Number of datagrams, at most 16; `0` disables the prelude |
+| `mode` | `invalid-initial` | Or `random`, which is useful as a control |
+| `length` | `match` | `match` sizes each datagram like the packet it precedes; or give a byte count |
+| `version` | `reserved` | Range to draw a fresh codepoint from per datagram: `reserved` (`0x?a?a?a?a`) or `draft`; or a fixed `v1`, `v2`, or hex value |
+
+Because it is an ordinary transport, it stacks above a proxy, and the prelude
+then travels the same path as the traffic it precedes:
+
+```console
+fetch -proto h3 -quic-versions 1 -method HEAD -v \
+  -transport 'socks5://user:pass@proxy.example:1080|quicprelude:count=1' \
+  https://example.com/
+```
+
+These options are intended for authorized measurement of path and middlebox
+behavior. Packet captures are recommended when exact wire behavior matters.
+
 Direct fetch:
 
 ```sh

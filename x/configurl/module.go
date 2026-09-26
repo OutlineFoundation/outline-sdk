@@ -53,6 +53,8 @@ func RegisterDefaultProviders(c *ProviderContainer) *ProviderContainer {
 	registerOverrideStreamDialer(&c.StreamDialers, "override", c.StreamDialers.NewInstance)
 	registerOverridePacketDialer(&c.PacketDialers, "override", c.PacketDialers.NewInstance)
 
+	registerQUICPreludePacketListener(&c.PacketListeners, "quicprelude", c.PacketListeners.NewInstance)
+
 	registerSOCKS5StreamDialer(&c.StreamDialers, "socks5", c.StreamDialers.NewInstance)
 	registerSOCKS5PacketDialer(&c.PacketDialers, "socks5", c.StreamDialers.NewInstance, c.PacketDialers.NewInstance)
 	registerSOCKS5PacketListener(&c.PacketListeners, "socks5", c.StreamDialers.NewInstance, c.PacketDialers.NewInstance)
@@ -137,7 +139,7 @@ func SanitizeConfig(configStr string) (string, error) {
 			if err != nil {
 				return "", err
 			}
-		case "override", "split", "tls", "tlsfrag":
+		case "override", "quicprelude", "split", "tls", "tlsfrag":
 			// No sanitization needed
 			part = config.URL.String()
 		default:
