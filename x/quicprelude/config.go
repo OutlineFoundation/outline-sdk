@@ -97,6 +97,20 @@ func (l *packetListener) ListenPacket(ctx context.Context) (net.PacketConn, erro
 // resent ClientHello, which is also when a lost prelude most needs replacing,
 // and before some Initials that only acknowledge the server's. See
 // [mayCarryClientHello] for which datagrams qualify.
+//
+// Embedding net.PacketConn as an interface deliberately exposes only its
+// methods, even when the inner connection is a *net.UDPConn. QUIC-Go v0.48.1
+// probes for SyscallConn, SetReadBuffer, ReadMsgUDP and WriteMsgUDP to select
+// its optimized UDP path on supported platforms. Without that interface it
+// sends through WriteTo, which is where this wrapper injects the prelude.
+// Forwarding WriteMsgUDP unchanged would bypass injection: the QUIC handshake
+// could still succeed while the prelude is silently omitted. Any additional
+// send method must inject the prelude before forwarding the original packet.
+//
+// This implementation gives up UDP segmentation offload, ECN and QUIC-Go's
+// socket-buffer tuning and DF setup for path MTU discovery where supported.
+// Those optimizations can be restored by conditionally exposing the inner
+// connection's capabilities and intercepting the optimized send path as well.
 type preludeConn struct {
 	net.PacketConn
 
