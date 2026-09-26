@@ -65,7 +65,7 @@ func NewPacketProxyFromPacketListener(pl transport.PacketListener, options ...fu
 // This means that if there are no WriteTo operations on the UDP session created by NewSession for the specified amount
 // of time, the proxy will end this session.
 //
-// Deprecated: Use [packetrelay.PacketListenerRelay.SetWriteIdleTimeout] instead.
+// Deprecated: Pass the timeout to [packetrelay.NewPacketRelayFromPacketListener] instead.
 func WithPacketListenerWriteIdleTimeout(timeout time.Duration) func(*PacketListenerProxy) error {
 	return func(p *PacketListenerProxy) error {
 		if timeout <= 0 {
