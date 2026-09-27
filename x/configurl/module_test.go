@@ -40,6 +40,10 @@ func TestSanitizeConfig(t *testing.T) {
 	require.Equal(t, "split:5|vless://UNKNOWN", sanitizedConfig)
 
 	// Test sanitizer with transport that don't have user info.
+	sanitizedConfig, err = SanitizeConfig("split:5|quicprelude:count=3&mode=random")
+	require.NoError(t, err)
+	require.Equal(t, "split:5|quicprelude:count=3&mode=random", sanitizedConfig)
+
 	sanitizedConfig, err = SanitizeConfig("split:5|tlsfrag:5")
 	require.NoError(t, err)
 	require.Equal(t, "split:5|tlsfrag:5", sanitizedConfig)
