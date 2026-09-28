@@ -142,7 +142,6 @@ func main() {
 		slog.Error("-quic-versions requires -proto h3")
 		os.Exit(1)
 	}
-
 	httpClient := &http.Client{
 		Timeout: time.Duration(*timeoutSecFlag) * time.Second,
 		CheckRedirect: func(req *http.Request, via []*http.Request) error {

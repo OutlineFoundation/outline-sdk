@@ -17,8 +17,8 @@ package configurl
 import (
 	"testing"
 
-	"golang.getoutline.org/sdk/transport/tls"
 	"github.com/stretchr/testify/require"
+	"golang.getoutline.org/sdk/transport/tls"
 )
 
 func TestTLS_SNI(t *testing.T) {
