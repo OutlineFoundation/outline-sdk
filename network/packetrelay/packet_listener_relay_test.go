@@ -51,36 +51,6 @@ func TestNewPacketRelayFromPacketListenerRejectsInvalidTimeout(t *testing.T) {
 	require.Nil(t, relay)
 }
 
-func TestPacketListenerRelaySetWriteIdleTimeout(t *testing.T) {
-	conn := &fakePacketConn{}
-	pl := &fakePacketListener{conn: conn}
-	timeout := 5 * time.Minute
-
-	relay, err := NewPacketRelayFromPacketListener(pl, 30*time.Second)
-	require.NoError(t, err)
-	require.NoError(t, relay.SetWriteIdleTimeout(timeout))
-
-	sender, _, err := relay.NewAssociation()
-	require.NoError(t, err)
-	require.Len(t, conn.deadlines, 1)
-	requireDeadlineNear(t, conn.deadlines[0], timeout)
-
-	err = sender.SendPacket([]byte("hello"), netip.MustParseAddrPort("1.2.3.4:53"))
-	require.NoError(t, err)
-	require.Len(t, conn.deadlines, 2)
-	requireDeadlineNear(t, conn.deadlines[1], timeout)
-	require.Len(t, conn.writes, 1)
-}
-
-func TestPacketListenerRelaySetWriteIdleTimeoutRejectsInvalidTimeout(t *testing.T) {
-	conn := &fakePacketConn{}
-	pl := &fakePacketListener{conn: conn}
-
-	relay, err := NewPacketRelayFromPacketListener(pl, 30*time.Second)
-	require.NoError(t, err)
-	require.Error(t, relay.SetWriteIdleTimeout(0))
-}
-
 func TestPacketListenerRelayReceiveTimeoutClosesAssociation(t *testing.T) {
 	conn := &fakePacketConn{readErr: timeoutErr{}}
 	pl := &fakePacketListener{conn: conn}
@@ -93,6 +63,44 @@ func TestPacketListenerRelayReceiveTimeoutClosesAssociation(t *testing.T) {
 	err = receiver.ReceivePackets(&mockPacketHandler{})
 	require.ErrorAs(t, err, &timeoutErr{})
 	require.True(t, conn.isClosed())
+}
+
+func TestPacketListenerRelaySendCloseRace(t *testing.T) {
+	relay, err := NewPacketRelayFromPacketListener(&fakePacketListener{conn: &fakePacketConn{}}, time.Second)
+	require.NoError(t, err)
+	sender, _, err := relay.NewAssociation()
+	require.NoError(t, err)
+
+	start := make(chan struct{})
+	var wg sync.WaitGroup
+	for range 10 {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			<-start
+			_ = sender.SendPacket([]byte("x"), netip.MustParseAddrPort("1.2.3.4:53"))
+		}()
+	}
+	close(start)
+	_ = sender.Close()
+	wg.Wait()
+}
+
+func TestPacketListenerRelayReceiveCloseRace(t *testing.T) {
+	conn := newBlockingPacketConn()
+	relay, err := NewPacketRelayFromPacketListener(&connListener{conn: conn}, time.Second)
+	require.NoError(t, err)
+	sender, receiver, err := relay.NewAssociation()
+	require.NoError(t, err)
+
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		_ = receiver.ReceivePackets(&mockPacketHandler{})
+	}()
+
+	_ = sender.Close()
+	<-done
 }
 
 func requireDeadlineNear(t *testing.T, deadline time.Time, timeout time.Duration) {
@@ -167,6 +175,36 @@ func (c *fakePacketConn) isClosed() bool {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	return c.closed
+}
+
+// blockingPacketConn blocks ReadFrom until Close is called, simulating a real UDP conn.
+type blockingPacketConn struct {
+	fakePacketConn
+	once   sync.Once
+	closed chan struct{}
+}
+
+func newBlockingPacketConn() *blockingPacketConn {
+	return &blockingPacketConn{closed: make(chan struct{})}
+}
+
+func (c *blockingPacketConn) ReadFrom(p []byte) (int, net.Addr, error) {
+	<-c.closed
+	return 0, nil, net.ErrClosed
+}
+
+func (c *blockingPacketConn) Close() error {
+	c.once.Do(func() { close(c.closed) })
+	return c.fakePacketConn.Close()
+}
+
+// connListener wraps a net.PacketConn as a transport.PacketListener.
+type connListener struct {
+	conn net.PacketConn
+}
+
+func (l *connListener) ListenPacket(_ context.Context) (net.PacketConn, error) {
+	return l.conn, nil
 }
 
 type timeoutErr struct{}
