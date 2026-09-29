@@ -20,6 +20,7 @@ import (
 	"crypto/x509"
 	"encoding/base64"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net"
 	"net/http"
@@ -341,16 +342,17 @@ func Test_ConnectClient_H2_TLS_Multiplexed(t *testing.T) {
 	verifyTunnel(t, connClient)
 }
 
-// newH3ProxyServer starts an HTTP/3 CONNECT proxy on a loopback UDP port. It returns the
-// proxy's "127.0.0.1:port" address and a cert pool that trusts the proxy's certificate.
-// Uses http3.HTTPStreamer to access the raw H3 stream.
-func newH3ProxyServer(t *testing.T) (string, *x509.CertPool) {
+// newH3ProxyServer starts an HTTP/3 CONNECT proxy on a loopback UDP port. It listens on
+// "localhost", so the address it returns is whichever loopback IP the machine maps that name to.
+// It also returns a cert pool that trusts the proxy's certificate, which is valid for both
+// loopback IPs. Uses http3.HTTPStreamer to access the raw H3 stream.
+func newH3ProxyServer(t *testing.T) (*net.UDPAddr, *x509.CertPool) {
 	t.Helper()
 
 	// http3.Server requires its own TLS config; borrow httptest's built-in cert.
 	tlsCert, certPool := tlsCertPool(t)
 
-	srvConn, err := net.ListenPacket("udp", "127.0.0.1:0")
+	srvConn, err := net.ListenPacket("udp", "localhost:0")
 	require.NoError(t, err, "ListenPacket")
 
 	proxySrv := &http3.Server{
@@ -391,7 +393,17 @@ func newH3ProxyServer(t *testing.T) (string, *x509.CertPool) {
 		_ = srvConn.Close()
 	})
 
-	return srvConn.LocalAddr().String(), certPool
+	return srvConn.LocalAddr().(*net.UDPAddr), certPool
+}
+
+// newLoopbackPacketConn returns a UDP connection bound to an ephemeral port on ip, so it is in
+// the same IP family as a server listening on that IP.
+func newLoopbackPacketConn(t *testing.T, ip net.IP) net.PacketConn {
+	t.Helper()
+	conn, err := net.ListenPacket("udp", net.JoinHostPort(ip.String(), "0"))
+	require.NoError(t, err, "ListenPacket")
+	t.Cleanup(func() { _ = conn.Close() })
+	return conn
 }
 
 // Test_ConnectClient_H3_QUIC verifies tunneling over HTTP/3, where CONNECT streams
@@ -400,12 +412,9 @@ func Test_ConnectClient_H3_QUIC(t *testing.T) {
 	t.Parallel()
 
 	proxyAddr, certPool := newH3ProxyServer(t)
+	cliConn := newLoopbackPacketConn(t, proxyAddr.IP)
 
-	cliConn, err := net.ListenPacket("udp", "127.0.0.1:0")
-	require.NoError(t, err, "ListenPacket")
-	t.Cleanup(func() { _ = cliConn.Close() })
-
-	tr, err := NewH3ProxyTransport(cliConn, proxyAddr,
+	tr, err := NewH3ProxyTransport(cliConn, proxyAddr.String(),
 		WithTLSOptions(tls.WithCertVerifier(&tls.StandardCertVerifier{Roots: certPool})),
 	)
 	require.NoError(t, err, "NewH3ProxyTransport")
@@ -419,21 +428,19 @@ func Test_ConnectClient_H3_QUIC(t *testing.T) {
 // Test_ConnectClient_H3_QUIC_HostnameProxy verifies that the proxy can be addressed by hostname.
 // QUIC needs a resolved UDP address for every datagram, so the transport must resolve the
 // hostname itself; before that, a hostname made quic-go panic on a *net.UDPConn.
+//
+// The proxy listens on whichever loopback IP "localhost" maps to, and the client connection is
+// bound to the same IP, so the transport resolves "localhost" to the family it can reach.
 func Test_ConnectClient_H3_QUIC_HostnameProxy(t *testing.T) {
 	t.Parallel()
 
 	proxyIPAddr, certPool := newH3ProxyServer(t)
-	_, port, err := net.SplitHostPort(proxyIPAddr)
-	require.NoError(t, err, "SplitHostPort")
-	proxyAddr := net.JoinHostPort("localhost", port)
-
-	cliConn, err := net.ListenPacket("udp", "127.0.0.1:0")
-	require.NoError(t, err, "ListenPacket")
-	t.Cleanup(func() { _ = cliConn.Close() })
+	proxyAddr := net.JoinHostPort("localhost", fmt.Sprint(proxyIPAddr.Port))
+	cliConn := newLoopbackPacketConn(t, proxyIPAddr.IP)
 
 	// The test certificate is not valid for "localhost", so validate it against the IP it covers.
 	tr, err := NewH3ProxyTransport(cliConn, proxyAddr,
-		WithTLSOptions(tls.WithCertVerifier(&tls.StandardCertVerifier{Roots: certPool, CertificateName: "127.0.0.1"})),
+		WithTLSOptions(tls.WithCertVerifier(&tls.StandardCertVerifier{Roots: certPool, CertificateName: proxyIPAddr.IP.String()})),
 	)
 	require.NoError(t, err, "NewH3ProxyTransport")
 
@@ -441,6 +448,39 @@ func Test_ConnectClient_H3_QUIC_HostnameProxy(t *testing.T) {
 	require.NoError(t, err, "NewConnectClient")
 
 	verifyTunnel(t, connClient)
+}
+
+// Test_chooseIPAddr verifies that the resolved proxy address matches the IP family the client
+// connection can send from.
+func Test_chooseIPAddr(t *testing.T) {
+	t.Parallel()
+
+	v4 := net.IPAddr{IP: net.IPv4(192, 0, 2, 1)}
+	v6 := net.IPAddr{IP: net.ParseIP("2001:db8::1")}
+	both := []net.IPAddr{v6, v4} // IPv6 first, as many resolvers order it.
+
+	tests := []struct {
+		name  string
+		local net.Addr
+		ips   []net.IPAddr
+		want  net.IPAddr
+	}{
+		{"IPv4 local prefers IPv4", &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1)}, both, v4},
+		{"IPv4 unspecified local prefers IPv4", &net.UDPAddr{IP: net.IPv4zero}, both, v4},
+		{"IPv6 unspecified local is dual-stack, prefers IPv4", &net.UDPAddr{IP: net.IPv6unspecified}, both, v4},
+		{"nil IP local prefers IPv4", &net.UDPAddr{}, both, v4},
+		{"non-UDP local prefers IPv4", &net.TCPAddr{IP: net.ParseIP("::1")}, both, v4},
+		{"nil local prefers IPv4", nil, both, v4},
+		{"specific IPv6 local prefers IPv6", &net.UDPAddr{IP: net.ParseIP("::1")}, both, v6},
+		{"IPv4 local falls back to IPv6 only", &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1)}, []net.IPAddr{v6}, v6},
+		{"specific IPv6 local falls back to IPv4 only", &net.UDPAddr{IP: net.ParseIP("::1")}, []net.IPAddr{v4}, v4},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			require.Equal(t, tt.want, chooseIPAddr(tt.local, tt.ips))
+		})
+	}
 }
 
 // Test_ConnectClient_H3_QUIC_UnresolvableProxy verifies that a proxy hostname that cannot be

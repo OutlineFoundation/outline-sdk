@@ -160,7 +160,8 @@ func NewH2ProxyTransport(dialer transport.StreamDialer, proxyAddr string, opts .
 
 // NewH3ProxyTransport creates an HTTP/3 transport that establishes a QUIC connection to the proxy using the given [net.PacketConn].
 // The proxy address must be in the form "host:port". The host may be an IP address or a hostname.
-// A hostname is resolved with the system resolver each time a QUIC connection is established.
+// A hostname is resolved with the system resolver each time a QUIC connection is established,
+// preferring an address of the same IP family as the connection's local address.
 //
 // For HTTP/3 over QUIC over a datagram connection.
 // [tls.WithALPN] has no effect on this transport.
@@ -185,7 +186,7 @@ func NewH3ProxyTransport(conn net.PacketConn, proxyAddr string, opts ...Transpor
 		Dial: func(ctx context.Context, _ string, tlsCfg *stdTLS.Config, quicCfg *quic.Config) (quic.EarlyConnection, error) {
 			// QUIC writes datagrams to this address, so it must be a resolved *net.UDPAddr:
 			// net.UDPConn rejects any other net.Addr type.
-			proxyUDPAddr, err := resolveUDPAddr(ctx, proxyAddr)
+			proxyUDPAddr, err := resolveUDPAddr(ctx, conn.LocalAddr(), proxyAddr)
 			if err != nil {
 				return nil, fmt.Errorf("failed to resolve proxy address %s: %w", proxyAddr, err)
 			}
@@ -201,36 +202,59 @@ func NewH3ProxyTransport(conn net.PacketConn, proxyAddr string, opts ...Transpor
 	}, nil
 }
 
-// resolveUDPAddr resolves a "host:port" address to a [net.UDPAddr]. An IP literal is used as is.
-// A hostname is looked up with [net.DefaultResolver], preferring an IPv4 address when one is
-// available, like [net.ResolveUDPAddr] does for the "udp" network.
-func resolveUDPAddr(ctx context.Context, address string) (*net.UDPAddr, error) {
+// resolveUDPAddr resolves a "host:port" address to a [net.UDPAddr] that can be written to from a
+// packet connection bound to localAddr. An IP literal is used as is. A hostname is looked up with
+// [net.DefaultResolver] and the address is chosen with [chooseIPAddr].
+func resolveUDPAddr(ctx context.Context, localAddr net.Addr, address string) (*net.UDPAddr, error) {
 	host, portStr, err := net.SplitHostPort(address)
 	if err != nil {
 		return nil, err
 	}
+
 	port, err := net.DefaultResolver.LookupPort(ctx, "udp", portStr)
 	if err != nil {
 		return nil, err
 	}
+
 	if ip := net.ParseIP(host); ip != nil {
 		return &net.UDPAddr{IP: ip, Port: port}, nil
 	}
+
 	ips, err := net.DefaultResolver.LookupIPAddr(ctx, host)
 	if err != nil {
 		return nil, err
 	}
+
 	if len(ips) == 0 {
 		return nil, fmt.Errorf("no addresses found for host %q", host)
 	}
-	chosen := ips[0]
+
+	chosen := chooseIPAddr(localAddr, ips)
+
+	return &net.UDPAddr{IP: chosen.IP, Port: port, Zone: chosen.Zone}, nil
+}
+
+// chooseIPAddr picks, from the non-empty list ips, the address a packet connection bound to
+// localAddr should send to. A connection bound to a specific IPv6 address can only reach IPv6, so
+// IPv6 is preferred for it. Anything else (an IPv4 address, the unspecified address, which Go binds
+// dual-stack, or a local address that is not a [net.UDPAddr], such as a proxied connection) prefers
+// IPv4, like [net.ResolveUDPAddr] does for the "udp" network. If no address of the preferred family
+// exists, the first address is returned.
+func chooseIPAddr(localAddr net.Addr, ips []net.IPAddr) net.IPAddr {
+	preferIPv6 := false
+
+	if udpAddr, ok := localAddr.(*net.UDPAddr); ok && udpAddr != nil {
+		ip := udpAddr.IP
+		preferIPv6 = len(ip) > 0 && ip.To4() == nil && !ip.IsUnspecified()
+	}
+
 	for _, ipAddr := range ips {
-		if ipAddr.IP.To4() != nil {
-			chosen = ipAddr
-			break
+		if (ipAddr.IP.To4() == nil) == preferIPv6 {
+			return ipAddr
 		}
 	}
-	return &net.UDPAddr{IP: chosen.IP, Port: port, Zone: chosen.Zone}, nil
+
+	return ips[0]
 }
 
 type transportConfig struct {
