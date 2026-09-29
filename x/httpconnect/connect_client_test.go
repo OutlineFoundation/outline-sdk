@@ -27,6 +27,7 @@ import (
 	"net/url"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/quic-go/quic-go/http3"
 	"github.com/stretchr/testify/require"
@@ -95,7 +96,6 @@ func verifyTunnel(t *testing.T, dialer transport.StreamDialer) {
 	require.NoError(t, json.NewDecoder(resp.Body).Decode(&got))
 	require.Equal(t, want, got)
 }
-
 
 // Test_ConnectClient_H1_Plain verifies that custom headers (e.g. Proxy-Authorization)
 // are forwarded on every CONNECT request when using a plain HTTP/1.1 proxy.
@@ -341,10 +341,11 @@ func Test_ConnectClient_H2_TLS_Multiplexed(t *testing.T) {
 	verifyTunnel(t, connClient)
 }
 
-// Test_ConnectClient_H3_QUIC verifies tunneling over HTTP/3, where CONNECT streams
-// run over QUIC rather than TCP. Uses http3.HTTPStreamer to access the raw H3 stream.
-func Test_ConnectClient_H3_QUIC(t *testing.T) {
-	t.Parallel()
+// newH3ProxyServer starts an HTTP/3 CONNECT proxy on a loopback UDP port. It returns the
+// proxy's "127.0.0.1:port" address and a cert pool that trusts the proxy's certificate.
+// Uses http3.HTTPStreamer to access the raw H3 stream.
+func newH3ProxyServer(t *testing.T) (string, *x509.CertPool) {
+	t.Helper()
 
 	// http3.Server requires its own TLS config; borrow httptest's built-in cert.
 	tlsCert, certPool := tlsCertPool(t)
@@ -390,11 +391,21 @@ func Test_ConnectClient_H3_QUIC(t *testing.T) {
 		_ = srvConn.Close()
 	})
 
+	return srvConn.LocalAddr().String(), certPool
+}
+
+// Test_ConnectClient_H3_QUIC verifies tunneling over HTTP/3, where CONNECT streams
+// run over QUIC rather than TCP.
+func Test_ConnectClient_H3_QUIC(t *testing.T) {
+	t.Parallel()
+
+	proxyAddr, certPool := newH3ProxyServer(t)
+
 	cliConn, err := net.ListenPacket("udp", "127.0.0.1:0")
 	require.NoError(t, err, "ListenPacket")
 	t.Cleanup(func() { _ = cliConn.Close() })
 
-	tr, err := NewH3ProxyTransport(cliConn, srvConn.LocalAddr().String(),
+	tr, err := NewH3ProxyTransport(cliConn, proxyAddr,
 		WithTLSOptions(tls.WithCertVerifier(&tls.StandardCertVerifier{Roots: certPool})),
 	)
 	require.NoError(t, err, "NewH3ProxyTransport")
@@ -403,6 +414,55 @@ func Test_ConnectClient_H3_QUIC(t *testing.T) {
 	require.NoError(t, err, "NewConnectClient")
 
 	verifyTunnel(t, connClient)
+}
+
+// Test_ConnectClient_H3_QUIC_HostnameProxy verifies that the proxy can be addressed by hostname.
+// QUIC needs a resolved UDP address for every datagram, so the transport must resolve the
+// hostname itself; before that, a hostname made quic-go panic on a *net.UDPConn.
+func Test_ConnectClient_H3_QUIC_HostnameProxy(t *testing.T) {
+	t.Parallel()
+
+	proxyIPAddr, certPool := newH3ProxyServer(t)
+	_, port, err := net.SplitHostPort(proxyIPAddr)
+	require.NoError(t, err, "SplitHostPort")
+	proxyAddr := net.JoinHostPort("localhost", port)
+
+	cliConn, err := net.ListenPacket("udp", "127.0.0.1:0")
+	require.NoError(t, err, "ListenPacket")
+	t.Cleanup(func() { _ = cliConn.Close() })
+
+	// The test certificate is not valid for "localhost", so validate it against the IP it covers.
+	tr, err := NewH3ProxyTransport(cliConn, proxyAddr,
+		WithTLSOptions(tls.WithCertVerifier(&tls.StandardCertVerifier{Roots: certPool, CertificateName: "127.0.0.1"})),
+	)
+	require.NoError(t, err, "NewH3ProxyTransport")
+
+	connClient, err := NewConnectClient(tr)
+	require.NoError(t, err, "NewConnectClient")
+
+	verifyTunnel(t, connClient)
+}
+
+// Test_ConnectClient_H3_QUIC_UnresolvableProxy verifies that a proxy hostname that cannot be
+// resolved produces an error from DialStream rather than a panic.
+func Test_ConnectClient_H3_QUIC_UnresolvableProxy(t *testing.T) {
+	t.Parallel()
+
+	cliConn, err := net.ListenPacket("udp", "127.0.0.1:0")
+	require.NoError(t, err, "ListenPacket")
+	t.Cleanup(func() { _ = cliConn.Close() })
+
+	// ".invalid" is reserved by RFC 2606 and never resolves.
+	tr, err := NewH3ProxyTransport(cliConn, "proxy.invalid:443")
+	require.NoError(t, err, "NewH3ProxyTransport")
+
+	connClient, err := NewConnectClient(tr)
+	require.NoError(t, err, "NewConnectClient")
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	_, err = connClient.DialStream(ctx, "example.com:443")
+	require.ErrorContains(t, err, "failed to resolve proxy address proxy.invalid:443")
 }
 
 // newTargetSrv starts a local HTTP server that responds to any request with resp serialized as JSON.

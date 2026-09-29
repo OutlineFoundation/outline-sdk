@@ -22,10 +22,10 @@ import (
 	"net"
 	"net/http"
 
-	"golang.getoutline.org/sdk/transport"
-	"golang.getoutline.org/sdk/transport/tls"
 	"github.com/quic-go/quic-go"
 	"github.com/quic-go/quic-go/http3"
+	"golang.getoutline.org/sdk/transport"
+	"golang.getoutline.org/sdk/transport/tls"
 	"golang.org/x/net/http2"
 )
 
@@ -159,7 +159,8 @@ func NewH2ProxyTransport(dialer transport.StreamDialer, proxyAddr string, opts .
 }
 
 // NewH3ProxyTransport creates an HTTP/3 transport that establishes a QUIC connection to the proxy using the given [net.PacketConn].
-// The proxy address must be in the form "host:port".
+// The proxy address must be in the form "host:port". The host may be an IP address or a hostname.
+// A hostname is resolved with the system resolver each time a QUIC connection is established.
 //
 // For HTTP/3 over QUIC over a datagram connection.
 // [tls.WithALPN] has no effect on this transport.
@@ -182,12 +183,14 @@ func NewH3ProxyTransport(conn net.PacketConn, proxyAddr string, opts ...Transpor
 
 	tr := &http3.Transport{
 		Dial: func(ctx context.Context, _ string, tlsCfg *stdTLS.Config, quicCfg *quic.Config) (quic.EarlyConnection, error) {
-			parsedProxyAddr, err := transport.MakeNetAddr("udp", proxyAddr)
+			// QUIC writes datagrams to this address, so it must be a resolved *net.UDPAddr:
+			// net.UDPConn rejects any other net.Addr type.
+			proxyUDPAddr, err := resolveUDPAddr(ctx, proxyAddr)
 			if err != nil {
-				return nil, fmt.Errorf("failed to parse proxy address %s: %w", proxyAddr, err)
+				return nil, fmt.Errorf("failed to resolve proxy address %s: %w", proxyAddr, err)
 			}
 
-			return quic.DialEarly(ctx, conn, parsedProxyAddr, tlsCfg, quicCfg)
+			return quic.DialEarly(ctx, conn, proxyUDPAddr, tlsCfg, quicCfg)
 		},
 		TLSClientConfig: toStdConfig(tlsConfig),
 	}
@@ -196,6 +199,38 @@ func NewH3ProxyTransport(conn net.PacketConn, proxyAddr string, opts ...Transpor
 		RoundTripper: tr,
 		scheme:       schemeHTTPS, // HTTP/3 is always over TLS
 	}, nil
+}
+
+// resolveUDPAddr resolves a "host:port" address to a [net.UDPAddr]. An IP literal is used as is.
+// A hostname is looked up with [net.DefaultResolver], preferring an IPv4 address when one is
+// available, like [net.ResolveUDPAddr] does for the "udp" network.
+func resolveUDPAddr(ctx context.Context, address string) (*net.UDPAddr, error) {
+	host, portStr, err := net.SplitHostPort(address)
+	if err != nil {
+		return nil, err
+	}
+	port, err := net.DefaultResolver.LookupPort(ctx, "udp", portStr)
+	if err != nil {
+		return nil, err
+	}
+	if ip := net.ParseIP(host); ip != nil {
+		return &net.UDPAddr{IP: ip, Port: port}, nil
+	}
+	ips, err := net.DefaultResolver.LookupIPAddr(ctx, host)
+	if err != nil {
+		return nil, err
+	}
+	if len(ips) == 0 {
+		return nil, fmt.Errorf("no addresses found for host %q", host)
+	}
+	chosen := ips[0]
+	for _, ipAddr := range ips {
+		if ipAddr.IP.To4() != nil {
+			chosen = ipAddr
+			break
+		}
+	}
+	return &net.UDPAddr{IP: chosen.IP, Port: port, Zone: chosen.Zone}, nil
 }
 
 type transportConfig struct {
