@@ -18,7 +18,6 @@ import (
 	"context"
 	"encoding/base64"
 	"fmt"
-	"net"
 	"net/http"
 	"net/url"
 	"strings"
@@ -171,21 +170,26 @@ func registerH2ConnectStreamDialer(r TypeRegistry[transport.StreamDialer], typeI
 //
 // Config format: h3connect://[user:pass@]host:port[?sni=SNI][&certname=CERTNAME][&auth=TOKEN]
 //
-// A UDP socket is created internally and shared across all CONNECT streams (QUIC multiplexing).
-// The base stream dialer is not used; QUIC always runs over a fresh UDP connection.
-func registerH3ConnectStreamDialer(r TypeRegistry[transport.StreamDialer], typeID string) {
+// QUIC runs over a single [net.PacketConn] obtained from the base packet listener (from the
+// previous element in the pipe chain), shared across all CONNECT streams (QUIC multiplexing).
+// With no previous element, the default packet listener creates a new UDP socket.
+func registerH3ConnectStreamDialer(r TypeRegistry[transport.StreamDialer], typeID string, newPL BuildFunc[transport.PacketListener]) {
 	r.RegisterType(typeID, func(ctx context.Context, config *Config) (transport.StreamDialer, error) {
+		pl, err := newPL(ctx, config.BaseConfig)
+		if err != nil {
+			return nil, err
+		}
 		opts, err := parseConnectOptions(config.URL)
 		if err != nil {
 			return nil, err
 		}
-		udpConn, err := net.ListenPacket("udp", ":0")
+		conn, err := pl.ListenPacket(ctx)
 		if err != nil {
-			return nil, fmt.Errorf("failed to create UDP socket: %w", err)
+			return nil, fmt.Errorf("failed to create packet connection: %w", err)
 		}
-		tr, err := httpconnect.NewH3ProxyTransport(udpConn, config.URL.Host, opts.transport...)
+		tr, err := httpconnect.NewH3ProxyTransport(conn, config.URL.Host, opts.transport...)
 		if err != nil {
-			udpConn.Close()
+			conn.Close()
 			return nil, err
 		}
 		return httpconnect.NewConnectClient(tr, opts.client...)
