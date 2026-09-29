@@ -20,10 +20,6 @@ still determines TLS SNI and certificate verification.
 fetch -proto h3 -transport 'socks5://127.0.0.1:1080' https://example.com/
 ```
 
-Wrapped direct UDP connections, such as a direct `quicprelude` transport, still
-require an IP destination or an IP `-address` override. Generic address handling
-for those wrappers remains a TODO. Raw UDP retains QUIC-Go's UDP optimizations.
-
 ### QUIC preludes
 
 Preludes are configured through `-transport`, not through dedicated flags, so

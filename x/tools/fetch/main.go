@@ -204,6 +204,7 @@ func main() {
 			}
 		}
 	} else if *protoFlag == "h3" {
+		providers.PacketListeners.BaseInstance = resolvingUDPListener{}
 		quicVersionValue := *quicVersionsFlag
 		if quicVersionValue == "" {
 			quicVersionValue = defaultQUICVersions
@@ -226,6 +227,7 @@ func main() {
 		quicTransport := &quic.Transport{
 			Conn: conn,
 		}
+		defer conn.Close()
 		defer quicTransport.Close()
 		httpTransport := &http3.Transport{
 			TLSClientConfig: &tlsConfig,
@@ -238,18 +240,10 @@ func main() {
 				if err != nil {
 					return nil, err
 				}
-				// Resolve locally for raw UDP sockets. Proxy packet connections
-				// must receive the hostname to resolve it remotely.
-				// TODO: Support hostname resolution for wrapped direct UDP sockets
-				// (e.g. quicprelude) through a transport-owned address API.
-				if _, isUDP := conn.(*net.UDPConn); isUDP {
-					if _, isIP := remoteAddr.(*net.UDPAddr); !isIP {
-						remoteAddr, err = net.ResolveUDPAddr("udp", addressToDial)
-						if err != nil {
-							return nil, err
-						}
-					}
-				}
+				// Fetch owns this packet connection for the request. Closing it
+				// cancels a pending DNS lookup if dialing is canceled or times out.
+				stopClose := context.AfterFunc(ctx, func() { _ = conn.Close() })
+				defer stopClose()
 				quicConf = quicConf.Clone()
 				quicConf.Versions = quicVersions
 				conn, err := quicTransport.DialEarly(ctx, remoteAddr, tlsConf, quicConf)
