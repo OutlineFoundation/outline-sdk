@@ -20,6 +20,7 @@ import (
 	"crypto/x509"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -30,6 +31,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/quic-go/quic-go"
 	"github.com/quic-go/quic-go/http3"
 	"github.com/stretchr/testify/require"
 	"golang.getoutline.org/sdk/transport"
@@ -425,75 +427,19 @@ func Test_ConnectClient_H3_QUIC(t *testing.T) {
 	verifyTunnel(t, connClient)
 }
 
-// Test_ConnectClient_H3_QUIC_HostnameProxy verifies that the proxy can be addressed by hostname.
-// QUIC needs a resolved UDP address for every datagram, so the transport must resolve the
-// hostname itself; before that, a hostname made quic-go panic on a *net.UDPConn.
-//
-// The proxy listens on whichever loopback IP "localhost" maps to, and the client connection is
-// bound to the same IP, so the transport resolves "localhost" to the family it can reach.
-func Test_ConnectClient_H3_QUIC_HostnameProxy(t *testing.T) {
+// Test_ConnectClient_H3_QUIC_HostnameOnRawUDPConn verifies that a proxy hostname over a plain
+// UDP socket fails with an error from DialStream. quic-go's optimized send path for raw sockets
+// casts the destination to *net.UDPAddr without checking, so without the guard this panics on a
+// quic-go goroutine and takes the process down.
+func Test_ConnectClient_H3_QUIC_HostnameOnRawUDPConn(t *testing.T) {
 	t.Parallel()
 
-	proxyIPAddr, certPool := newH3ProxyServer(t)
+	proxyIPAddr, _ := newH3ProxyServer(t)
 	proxyAddr := net.JoinHostPort("localhost", fmt.Sprint(proxyIPAddr.Port))
 	cliConn := newLoopbackPacketConn(t, proxyIPAddr.IP)
+	require.Implements(t, (*quic.OOBCapablePacketConn)(nil), cliConn, "a *net.UDPConn takes quic-go's raw socket path")
 
-	// The test certificate is not valid for "localhost", so validate it against the IP it covers.
-	tr, err := NewH3ProxyTransport(cliConn, proxyAddr,
-		WithTLSOptions(tls.WithCertVerifier(&tls.StandardCertVerifier{Roots: certPool, CertificateName: proxyIPAddr.IP.String()})),
-	)
-	require.NoError(t, err, "NewH3ProxyTransport")
-
-	connClient, err := NewConnectClient(tr)
-	require.NoError(t, err, "NewConnectClient")
-
-	verifyTunnel(t, connClient)
-}
-
-// Test_chooseIPAddr verifies that the resolved proxy address matches the IP family the client
-// connection can send from.
-func Test_chooseIPAddr(t *testing.T) {
-	t.Parallel()
-
-	v4 := net.IPAddr{IP: net.IPv4(192, 0, 2, 1)}
-	v6 := net.IPAddr{IP: net.ParseIP("2001:db8::1")}
-	both := []net.IPAddr{v6, v4} // IPv6 first, as many resolvers order it.
-
-	tests := []struct {
-		name  string
-		local net.Addr
-		ips   []net.IPAddr
-		want  net.IPAddr
-	}{
-		{"IPv4 local prefers IPv4", &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1)}, both, v4},
-		{"IPv4 unspecified local prefers IPv4", &net.UDPAddr{IP: net.IPv4zero}, both, v4},
-		{"IPv6 unspecified local is dual-stack, prefers IPv4", &net.UDPAddr{IP: net.IPv6unspecified}, both, v4},
-		{"nil IP local prefers IPv4", &net.UDPAddr{}, both, v4},
-		{"non-UDP local prefers IPv4", &net.TCPAddr{IP: net.ParseIP("::1")}, both, v4},
-		{"nil local prefers IPv4", nil, both, v4},
-		{"specific IPv6 local prefers IPv6", &net.UDPAddr{IP: net.ParseIP("::1")}, both, v6},
-		{"IPv4 local falls back to IPv6 only", &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1)}, []net.IPAddr{v6}, v6},
-		{"specific IPv6 local falls back to IPv4 only", &net.UDPAddr{IP: net.ParseIP("::1")}, []net.IPAddr{v4}, v4},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			t.Parallel()
-			require.Equal(t, tt.want, chooseIPAddr(tt.local, tt.ips))
-		})
-	}
-}
-
-// Test_ConnectClient_H3_QUIC_UnresolvableProxy verifies that a proxy hostname that cannot be
-// resolved produces an error from DialStream rather than a panic.
-func Test_ConnectClient_H3_QUIC_UnresolvableProxy(t *testing.T) {
-	t.Parallel()
-
-	cliConn, err := net.ListenPacket("udp", "127.0.0.1:0")
-	require.NoError(t, err, "ListenPacket")
-	t.Cleanup(func() { _ = cliConn.Close() })
-
-	// ".invalid" is reserved by RFC 2606 and never resolves.
-	tr, err := NewH3ProxyTransport(cliConn, "proxy.invalid:443")
+	tr, err := NewH3ProxyTransport(cliConn, proxyAddr)
 	require.NoError(t, err, "NewH3ProxyTransport")
 
 	connClient, err := NewConnectClient(tr)
@@ -502,7 +448,57 @@ func Test_ConnectClient_H3_QUIC_UnresolvableProxy(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	_, err = connClient.DialStream(ctx, "example.com:443")
-	require.ErrorContains(t, err, "failed to resolve proxy address proxy.invalid:443")
+	require.ErrorContains(t, err, "cannot send to \""+proxyAddr+"\"")
+}
+
+// recordingPacketConn wraps a net.PacketConn as an interface, so it does not expose the raw socket
+// and quic-go sends through WriteTo. It records the destination of the first write and fails it.
+type recordingPacketConn struct {
+	net.PacketConn
+	mu    sync.Mutex
+	first net.Addr
+}
+
+func (c *recordingPacketConn) WriteTo(p []byte, addr net.Addr) (int, error) {
+	c.mu.Lock()
+	if c.first == nil {
+		c.first = addr
+	}
+	c.mu.Unlock()
+	return 0, errors.New("recordingPacketConn: write refused")
+}
+
+func (c *recordingPacketConn) firstDestination() net.Addr {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.first
+}
+
+// Test_ConnectClient_H3_QUIC_HostnameReachesWrappedConn verifies that a proxy hostname is handed
+// to a wrapped packet connection unresolved. This is what lets a SOCKS5 or Shadowsocks packet
+// connection carry the name to the proxy, which resolves it.
+func Test_ConnectClient_H3_QUIC_HostnameReachesWrappedConn(t *testing.T) {
+	t.Parallel()
+
+	inner := newLoopbackPacketConn(t, net.IPv4(127, 0, 0, 1))
+	cliConn := &recordingPacketConn{PacketConn: inner}
+
+	tr, err := NewH3ProxyTransport(cliConn, "proxy.example:443")
+	require.NoError(t, err, "NewH3ProxyTransport")
+
+	connClient, err := NewConnectClient(tr)
+	require.NoError(t, err, "NewConnectClient")
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	_, err = connClient.DialStream(ctx, "example.com:443")
+	require.ErrorContains(t, err, "write refused")
+
+	dst := cliConn.firstDestination()
+	require.NotNil(t, dst, "no datagram was written to the wrapped connection")
+	require.Equal(t, "proxy.example:443", dst.String(), "the hostname must reach the connection unresolved")
+	_, isUDPAddr := dst.(*net.UDPAddr)
+	require.False(t, isUDPAddr, "the destination must not have been resolved to a *net.UDPAddr")
 }
 
 // newTargetSrv starts a local HTTP server that responds to any request with resp serialized as JSON.
