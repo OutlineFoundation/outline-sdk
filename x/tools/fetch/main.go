@@ -36,7 +36,6 @@ import (
 	"github.com/quic-go/quic-go/http3"
 	"golang.getoutline.org/sdk/transport"
 	"golang.getoutline.org/sdk/x/configurl"
-	"golang.getoutline.org/sdk/x/internal/packetconn"
 	"golang.org/x/term"
 )
 
@@ -205,12 +204,6 @@ func main() {
 			}
 		}
 	} else if *protoFlag == "h3" {
-		ctx := context.Background()
-		if *timeoutSecFlag > 0 {
-			var cancel context.CancelFunc
-			ctx, cancel = context.WithTimeout(ctx, time.Duration(*timeoutSecFlag)*time.Second)
-			defer cancel()
-		}
 		quicVersionValue := *quicVersionsFlag
 		if quicVersionValue == "" {
 			quicVersionValue = defaultQUICVersions
@@ -220,24 +213,19 @@ func main() {
 			slog.Error("Invalid QUIC versions", "error", err)
 			os.Exit(1)
 		}
-		listener, err := providers.NewPacketListener(ctx, *transportFlag)
+		listener, err := providers.NewPacketListener(context.Background(), *transportFlag)
 		if err != nil {
 			slog.Error("Could not create listener", "error", err)
 			os.Exit(1)
 		}
-		conn, err := listener.ListenPacket(ctx)
+		conn, err := listener.ListenPacket(context.Background())
 		if err != nil {
 			slog.Error("Could not create PacketConn", "error", err)
 			os.Exit(1)
 		}
 		quicTransport := &quic.Transport{
-			Conn: packetconn.Generic{PacketConn: conn},
+			Conn: conn,
 		}
-		defer conn.Close()
-		// The listener's setup context does not own the returned connection.
-		// Fetch owns it for this request, so close it on timeout to cancel DNS too.
-		stopClose := context.AfterFunc(ctx, func() { _ = conn.Close() })
-		defer stopClose()
 		defer quicTransport.Close()
 		httpTransport := &http3.Transport{
 			TLSClientConfig: &tlsConfig,
@@ -246,10 +234,21 @@ func main() {
 				if err != nil {
 					return nil, fmt.Errorf("invalid address: %w", err)
 				}
-				// Preserve hostnames so proxy transports can resolve them remotely.
 				remoteAddr, err := transport.MakeNetAddr("udp", addressToDial)
 				if err != nil {
 					return nil, err
+				}
+				// Resolve locally for raw UDP sockets. Proxy packet connections
+				// must receive the hostname to resolve it remotely.
+				// TODO: Support hostname resolution for wrapped direct UDP sockets
+				// (e.g. quicprelude) through a transport-owned address API.
+				if _, isUDP := conn.(*net.UDPConn); isUDP {
+					if _, isIP := remoteAddr.(*net.UDPAddr); !isIP {
+						remoteAddr, err = net.ResolveUDPAddr("udp", addressToDial)
+						if err != nil {
+							return nil, err
+						}
+					}
 				}
 				quicConf = quicConf.Clone()
 				quicConf.Versions = quicVersions

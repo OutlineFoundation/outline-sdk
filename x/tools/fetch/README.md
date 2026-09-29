@@ -13,20 +13,19 @@ The tool logs the negotiated QUIC version and wire codepoint after a successful
 HTTP/3 request. Use `1,2` (the default) to prefer v1, or `2,1` to prefer v2
 while allowing fallback through version negotiation.
 
-HTTP/3 destination hostnames are passed to the packet transport without an
-upfront DNS lookup. SOCKS5 and Shadowsocks can therefore resolve the destination
-at the proxy. Direct UDP resolves names locally when writing the first packet,
-and pins the answer for the lifetime of the fetch. `-address` can override the
-destination with either a hostname or an IP; the URL still determines TLS SNI
-and certificate verification.
+With `-proto h3`, fetch resolves destination hostnames locally only when the
+packet connection is a raw `*net.UDPConn`. SOCKS5 and Shadowsocks receive the
+hostname and can resolve it at the proxy. IP destinations are passed through.
+`-address` can override the destination with either a hostname or an IP; the URL
+still determines TLS SNI and certificate verification.
 
 ```console
 fetch -proto h3 -transport 'socks5://127.0.0.1:1080' https://example.com/
 ```
 
-Fetch uses QUIC-Go's generic packet I/O path so the selected packet listener
-handles destination names. Socket buffer sizing is forwarded when supported;
-UDP offload optimizations are disabled.
+Wrapped direct UDP connections, such as a direct `quicprelude` transport, still
+require an IP destination or an IP `-address` override. Generic address handling
+for those wrappers remains a TODO. Raw UDP retains QUIC-Go's UDP optimizations.
 
 ### QUIC preludes
 

@@ -22,11 +22,10 @@ import (
 	"net"
 	"net/http"
 
-	"github.com/quic-go/quic-go"
-	"github.com/quic-go/quic-go/http3"
 	"golang.getoutline.org/sdk/transport"
 	"golang.getoutline.org/sdk/transport/tls"
-	"golang.getoutline.org/sdk/x/internal/packetconn"
+	"github.com/quic-go/quic-go"
+	"github.com/quic-go/quic-go/http3"
 	"golang.org/x/net/http2"
 )
 
@@ -162,11 +161,6 @@ func NewH2ProxyTransport(dialer transport.StreamDialer, proxyAddr string, opts .
 // NewH3ProxyTransport creates an HTTP/3 transport that establishes a QUIC connection to the proxy using the given [net.PacketConn].
 // The proxy address must be in the form "host:port".
 //
-// Destination names are passed unchanged to conn.WriteTo. The packet connection
-// must support the address: proxy transports can resolve names remotely, whereas
-// a raw net.UDPConn requires an IP address. QUIC-Go uses generic packet I/O so it
-// cannot bypass the connection's address handling via its optimized UDP writer.
-//
 // For HTTP/3 over QUIC over a datagram connection.
 // [tls.WithALPN] has no effect on this transport.
 func NewH3ProxyTransport(conn net.PacketConn, proxyAddr string, opts ...TransportOption) (ProxyRoundTripper, error) {
@@ -193,7 +187,7 @@ func NewH3ProxyTransport(conn net.PacketConn, proxyAddr string, opts ...Transpor
 				return nil, fmt.Errorf("failed to parse proxy address %s: %w", proxyAddr, err)
 			}
 
-			return quic.DialEarly(ctx, packetconn.Generic{PacketConn: conn}, parsedProxyAddr, tlsCfg, quicCfg)
+			return quic.DialEarly(ctx, conn, parsedProxyAddr, tlsCfg, quicCfg)
 		},
 		TLSClientConfig: toStdConfig(tlsConfig),
 	}

@@ -47,43 +47,11 @@ func TestFetchProcess(t *testing.T) {
 	net.DefaultResolver = &net.Resolver{PreferGo: true, Dial: func(context.Context, string, string) (net.Conn, error) {
 		return nil, errors.New("local DNS disabled by test")
 	}}
-	if os.Getenv("OUTLINE_FETCH_TEST_STALL_DNS") == "1" {
-		net.DefaultResolver.Dial = func(ctx context.Context, _, _ string) (net.Conn, error) {
-			<-ctx.Done()
-			return nil, ctx.Err()
-		}
-	}
 	main()
 	os.Exit(0)
 }
 
-func TestFetchHTTP3TimeoutWithStalledDNS(t *testing.T) {
-	executable, err := os.Executable()
-	require.NoError(t, err)
-	// Fetch's own timeout must still stop the request after DNS is detached from
-	// the setup context. The watchdog must not be what stops the subprocess.
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-	cmd := exec.CommandContext(ctx, executable, "-test.run=^TestFetchProcess$", "--",
-		"-proto", "h3", "-timeout", "1", "https://stalled.invalid/")
-	cmd.Env = append(os.Environ(), "OUTLINE_FETCH_TEST_PROCESS=1", "OUTLINE_FETCH_TEST_STALL_DNS=1")
-	output, err := cmd.CombinedOutput()
-	require.Error(t, err)
-	require.NoError(t, ctx.Err(), "fetch must exit on its own timeout: %s", output)
-	require.Contains(t, string(output), "HTTP request failed")
-}
-
 func TestFetchHTTP3SendsHostnameToShadowsocks(t *testing.T) {
-	for _, connect := range []bool{false, true} {
-		name := "HTTP3"
-		if connect {
-			name = "H3Connect"
-		}
-		t.Run(name, func(t *testing.T) { testFetchHostnameToShadowsocks(t, connect) })
-	}
-}
-
-func testFetchHostnameToShadowsocks(t *testing.T, connect bool) {
 	relay, err := net.ListenPacket("udp", "127.0.0.1:0")
 	require.NoError(t, err)
 	defer relay.Close()
@@ -99,9 +67,6 @@ func testFetchHostnameToShadowsocks(t *testing.T, connect bool) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	args := []string{"-test.run=^TestFetchProcess$", "--", "-proto", "h3", "-timeout", "3", "-quic-versions", "2", "-transport", config, "https://remote-only.invalid/"}
-	if connect {
-		args = []string{"-test.run=^TestFetchProcess$", "--", "-timeout", "3", "-transport", config + "|h3connect://remote-only.invalid:443", "https://example.com/"}
-	}
 	cmd := exec.CommandContext(ctx, executable, args...)
 	cmd.Env = append(os.Environ(), "OUTLINE_FETCH_TEST_PROCESS=1")
 	require.NoError(t, cmd.Start())
@@ -119,7 +84,5 @@ func testFetchHostnameToShadowsocks(t *testing.T, connect bool) {
 	packet := plaintext[len(addr):]
 	require.Greater(t, len(packet), 5)
 	// The caller's requested QUIC v2 must survive the change to address handling.
-	if !connect {
-		require.Equal(t, []byte{0x6b, 0x33, 0x43, 0xcf}, packet[1:5])
-	}
+	require.Equal(t, []byte{0x6b, 0x33, 0x43, 0xcf}, packet[1:5])
 }
