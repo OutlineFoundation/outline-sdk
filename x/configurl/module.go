@@ -35,7 +35,7 @@ func NewProviderContainer() *ProviderContainer {
 	return &ProviderContainer{
 		StreamDialers:   NewExtensibleProvider[transport.StreamDialer](&transport.TCPDialer{}),
 		PacketDialers:   NewExtensibleProvider[transport.PacketDialer](&transport.UDPDialer{}),
-		PacketListeners: NewExtensibleProvider[transport.PacketListener](&transport.UDPListener{}),
+		PacketListeners: NewExtensibleProvider[transport.PacketListener](resolvingUDPListener{}),
 	}
 }
 

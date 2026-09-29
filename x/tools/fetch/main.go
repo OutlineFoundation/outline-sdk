@@ -34,7 +34,9 @@ import (
 	"github.com/lmittmann/tint"
 	"github.com/quic-go/quic-go"
 	"github.com/quic-go/quic-go/http3"
+	"golang.getoutline.org/sdk/transport"
 	"golang.getoutline.org/sdk/x/configurl"
+	"golang.getoutline.org/sdk/x/internal/packetconn"
 	"golang.org/x/term"
 )
 
@@ -203,6 +205,12 @@ func main() {
 			}
 		}
 	} else if *protoFlag == "h3" {
+		ctx := context.Background()
+		if *timeoutSecFlag > 0 {
+			var cancel context.CancelFunc
+			ctx, cancel = context.WithTimeout(ctx, time.Duration(*timeoutSecFlag)*time.Second)
+			defer cancel()
+		}
 		quicVersionValue := *quicVersionsFlag
 		if quicVersionValue == "" {
 			quicVersionValue = defaultQUICVersions
@@ -212,19 +220,20 @@ func main() {
 			slog.Error("Invalid QUIC versions", "error", err)
 			os.Exit(1)
 		}
-		listener, err := providers.NewPacketListener(context.Background(), *transportFlag)
+		listener, err := providers.NewPacketListener(ctx, *transportFlag)
 		if err != nil {
 			slog.Error("Could not create listener", "error", err)
 			os.Exit(1)
 		}
-		conn, err := listener.ListenPacket(context.Background())
+		conn, err := listener.ListenPacket(ctx)
 		if err != nil {
 			slog.Error("Could not create PacketConn", "error", err)
 			os.Exit(1)
 		}
 		quicTransport := &quic.Transport{
-			Conn: conn,
+			Conn: packetconn.Generic{PacketConn: conn},
 		}
+		defer conn.Close()
 		defer quicTransport.Close()
 		httpTransport := &http3.Transport{
 			TLSClientConfig: &tlsConfig,
@@ -233,13 +242,14 @@ func main() {
 				if err != nil {
 					return nil, fmt.Errorf("invalid address: %w", err)
 				}
-				udpAddr, err := net.ResolveUDPAddr("udp", addressToDial)
+				// Preserve hostnames so proxy transports can resolve them remotely.
+				remoteAddr, err := transport.MakeNetAddr("udp", addressToDial)
 				if err != nil {
 					return nil, err
 				}
 				quicConf = quicConf.Clone()
 				quicConf.Versions = quicVersions
-				conn, err := quicTransport.DialEarly(ctx, udpAddr, tlsConf, quicConf)
+				conn, err := quicTransport.DialEarly(ctx, remoteAddr, tlsConf, quicConf)
 				if err != nil {
 					return nil, err
 				}

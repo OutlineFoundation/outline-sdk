@@ -41,6 +41,11 @@ In this example:
 
 An empty string ("") represents the default TCP/UDP dialer.
 
+The default packet listener accepts IP addresses and hostnames. It resolves names
+locally on the first WriteTo and pins each answer for that packet connection's
+lifetime. SOCKS5 and Shadowsocks packet listeners carry destination names to the
+proxy for resolution. H3 CONNECT leaves this choice to its underlying listener.
+
 Each transport definition follows a URL-like format, where the scheme identifies the transport type, and the opaque part (after the scheme) contains options specific to the transport.
 
 The following sections list transport types are currently supported, along with their configuration options.

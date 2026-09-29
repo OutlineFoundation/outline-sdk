@@ -20,6 +20,7 @@ import (
 	"crypto/x509"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"io"
 	"net"
 	"net/http"
@@ -27,7 +28,9 @@ import (
 	"net/url"
 	"sync"
 	"testing"
+	"time"
 
+	"github.com/quic-go/quic-go"
 	"github.com/quic-go/quic-go/http3"
 	"github.com/stretchr/testify/require"
 	"golang.getoutline.org/sdk/transport"
@@ -78,7 +81,7 @@ func verifyTunnel(t *testing.T, dialer transport.StreamDialer) {
 		},
 	}
 
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	t.Cleanup(cancel)
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, targetSrv.URL, nil)
@@ -95,7 +98,6 @@ func verifyTunnel(t *testing.T, dialer transport.StreamDialer) {
 	require.NoError(t, json.NewDecoder(resp.Body).Decode(&got))
 	require.Equal(t, want, got)
 }
-
 
 // Test_ConnectClient_H1_Plain verifies that custom headers (e.g. Proxy-Authorization)
 // are forwarded on every CONNECT request when using a plain HTTP/1.1 proxy.
@@ -390,19 +392,33 @@ func Test_ConnectClient_H3_QUIC(t *testing.T) {
 		_ = srvConn.Close()
 	})
 
-	cliConn, err := net.ListenPacket("udp", "127.0.0.1:0")
-	require.NoError(t, err, "ListenPacket")
-	t.Cleanup(func() { _ = cliConn.Close() })
-
-	tr, err := NewH3ProxyTransport(cliConn, srvConn.LocalAddr().String(),
-		WithTLSOptions(tls.WithCertVerifier(&tls.StandardCertVerifier{Roots: certPool})),
-	)
-	require.NoError(t, err, "NewH3ProxyTransport")
-
-	connClient, err := NewConnectClient(tr)
-	require.NoError(t, err, "NewConnectClient")
-
-	verifyTunnel(t, connClient)
+	for _, hostname := range []bool{false, true} {
+		name := "IP"
+		if hostname {
+			name = "Hostname"
+		}
+		t.Run(name, func(t *testing.T) {
+			raw, err := net.ListenUDP("udp", &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1)})
+			require.NoError(t, err)
+			t.Cleanup(func() { _ = raw.Close() })
+			var cliConn net.PacketConn = raw
+			proxyAddr := srvConn.LocalAddr().String()
+			if hostname {
+				proxyAddr = "proxy-only.invalid:443"
+				// This conn accepts names but also exposes all optimized UDP methods.
+				// QUIC must call its WriteTo so it can perform its own address handling.
+				cliConn = &mappedPacketConn{UDPConn: raw, destination: srvConn.LocalAddr()}
+				require.Implements(t, (*quic.OOBCapablePacketConn)(nil), cliConn)
+			}
+			tr, err := NewH3ProxyTransport(cliConn, proxyAddr,
+				WithTLSOptions(tls.WithCertVerifier(&tls.StandardCertVerifier{Roots: certPool})),
+			)
+			require.NoError(t, err, "NewH3ProxyTransport")
+			connClient, err := NewConnectClient(tr)
+			require.NoError(t, err, "NewConnectClient")
+			verifyTunnel(t, connClient)
+		})
+	}
 }
 
 // newTargetSrv starts a local HTTP server that responds to any request with resp serialized as JSON.
@@ -418,4 +434,35 @@ func newTargetSrv(t *testing.T, resp interface{}) *httptest.Server {
 		_, err = w.Write(jsonResp)
 		require.NoError(t, err)
 	}))
+}
+
+// Map a name at the packet connection boundary, as a proxy would. Keeping the
+// UDP method set here reproduces the panic if QUIC bypasses this WriteTo.
+type mappedPacketConn struct {
+	*net.UDPConn
+	destination net.Addr
+}
+
+func (c *mappedPacketConn) WriteTo(p []byte, addr net.Addr) (int, error) {
+	if addr.String() != "proxy-only.invalid:443" {
+		return 0, errors.New("destination was resolved before WriteTo: " + addr.String())
+	}
+	return c.UDPConn.WriteTo(p, c.destination)
+}
+
+func TestH3RawUDPHostnameReturnsError(t *testing.T) {
+	conn, err := net.ListenPacket("udp", "127.0.0.1:0")
+	require.NoError(t, err)
+	defer conn.Close()
+	tr, err := NewH3ProxyTransport(conn, "proxy-only.invalid:443")
+	require.NoError(t, err)
+	client, err := NewConnectClient(tr)
+	require.NoError(t, err)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	_, err = client.DialStream(ctx, "example.com:443")
+	// The raw socket cannot handle names, but must return an error, not panic.
+	// QUIC wraps the socket error in a transport error, preserving its text.
+	require.ErrorContains(t, err, "write udp")
+	require.ErrorContains(t, err, "proxy-only.invalid:443")
 }
