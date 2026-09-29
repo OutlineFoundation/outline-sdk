@@ -35,11 +35,13 @@ func (resolvingUDPListener) ListenPacket(ctx context.Context) (net.PacketConn, e
 	if err != nil {
 		return nil, err
 	}
-	ctx, cancel := context.WithCancel(ctx)
+	// Like net.ListenConfig, the caller's context only governs socket setup.
+	// Later writes use a connection-owned context, canceled by Close.
+	ctx, cancel := context.WithCancel(context.Background())
 	return &resolvingUDPConn{
 		Generic: packetconn.Generic{PacketConn: conn}, ctx: ctx, cancel: cancel,
 		lookup:    net.DefaultResolver.LookupIPAddr,
-		addresses: make(map[string]*net.UDPAddr),
+		addresses: make(map[string]*udpResolution),
 	}, nil
 }
 
@@ -51,7 +53,15 @@ type resolvingUDPConn struct {
 	cancel    context.CancelFunc
 	lookup    func(context.Context, string) ([]net.IPAddr, error)
 	mu        sync.Mutex
-	addresses map[string]*net.UDPAddr
+	addresses map[string]*udpResolution
+}
+
+// The result is immutable once ready is closed. Successful entries stay pinned;
+// failed entries are removed so a later write can retry.
+type udpResolution struct {
+	ready chan struct{}
+	addr  *net.UDPAddr
+	err   error
 }
 
 func (c *resolvingUDPConn) WriteTo(p []byte, addr net.Addr) (int, error) {
@@ -67,10 +77,28 @@ func (c *resolvingUDPConn) WriteTo(p []byte, addr net.Addr) (int, error) {
 
 func (c *resolvingUDPConn) resolve(address string) (*net.UDPAddr, error) {
 	c.mu.Lock()
-	defer c.mu.Unlock()
-	if addr := c.addresses[address]; addr != nil {
-		return addr, nil
+	if pending := c.addresses[address]; pending != nil {
+		c.mu.Unlock()
+		<-pending.ready
+		return pending.addr, pending.err
 	}
+	pending := &udpResolution{ready: make(chan struct{})}
+	c.addresses[address] = pending
+	c.mu.Unlock()
+
+	// Deduplicate lookups for this destination without blocking other addresses,
+	// including already cached ones, behind a potentially slow DNS request.
+	pending.addr, pending.err = c.lookupAddress(address)
+	c.mu.Lock()
+	if pending.err != nil {
+		delete(c.addresses, address)
+	}
+	close(pending.ready)
+	c.mu.Unlock()
+	return pending.addr, pending.err
+}
+
+func (c *resolvingUDPConn) lookupAddress(address string) (*net.UDPAddr, error) {
 	host, portText, err := net.SplitHostPort(address)
 	if err != nil {
 		return nil, err
@@ -94,11 +122,7 @@ func (c *resolvingUDPConn) resolve(address string) (*net.UDPAddr, error) {
 			break
 		}
 	}
-	addr := &net.UDPAddr{IP: chosen.IP, Port: port, Zone: chosen.Zone}
-	// Pin the answer for this packet connection so a DNS rotation cannot
-	// move an established QUIC flow (or its prelude) to a different server.
-	c.addresses[address] = addr
-	return addr, nil
+	return &net.UDPAddr{IP: chosen.IP, Port: port, Zone: chosen.Zone}, nil
 }
 
 func (c *resolvingUDPConn) Close() error {

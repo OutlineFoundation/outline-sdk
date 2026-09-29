@@ -127,4 +127,115 @@ func TestDirectUDPResolutionFailure(t *testing.T) {
 	c.lookup = func(context.Context, string) ([]net.IPAddr, error) { return nil, nil }
 	_, err = conn.WriteTo([]byte("hello"), addr)
 	require.ErrorContains(t, err, "no addresses found")
+	// A failed lookup must not poison the cache: a later attempt can succeed.
+	c.lookup = func(context.Context, string) ([]net.IPAddr, error) {
+		return []net.IPAddr{{IP: net.IPv4(127, 0, 0, 1)}}, nil
+	}
+	resolved, err := c.resolve(addr.String())
+	require.NoError(t, err)
+	require.Equal(t, "127.0.0.1:443", resolved.String())
+}
+
+func TestDirectUDPResolutionOutlivesSetupContext(t *testing.T) {
+	setupCtx, cancelSetup := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancelSetup()
+	conn, err := (resolvingUDPListener{}).ListenPacket(setupCtx)
+	require.NoError(t, err)
+	defer conn.Close()
+	cancelSetup()
+
+	receiver, err := net.ListenPacket("udp", "127.0.0.1:0")
+	require.NoError(t, err)
+	defer receiver.Close()
+	_, port, err := net.SplitHostPort(receiver.LocalAddr().String())
+	require.NoError(t, err)
+	addr, err := transport.MakeNetAddr("udp", net.JoinHostPort("after-setup.invalid", port))
+	require.NoError(t, err)
+	c := conn.(*resolvingUDPConn)
+	c.lookup = func(ctx context.Context, host string) ([]net.IPAddr, error) {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
+		if _, ok := ctx.Deadline(); ok {
+			return nil, errors.New("lookup inherited the setup deadline")
+		}
+		return []net.IPAddr{{IP: net.IPv4(127, 0, 0, 1)}}, nil
+	}
+	_, err = conn.WriteTo([]byte("after setup"), addr)
+	require.NoError(t, err)
+	require.NoError(t, receiver.SetReadDeadline(time.Now().Add(time.Second)))
+	buf := make([]byte, 32)
+	n, _, err := receiver.ReadFrom(buf)
+	require.NoError(t, err)
+	require.Equal(t, "after setup", string(buf[:n]))
+}
+
+func TestDirectUDPSlowLookupDoesNotBlockOtherDestinations(t *testing.T) {
+	conn, err := (resolvingUDPListener{}).ListenPacket(context.Background())
+	require.NoError(t, err)
+	defer conn.Close()
+	receiver, err := net.ListenPacket("udp", "127.0.0.1:0")
+	require.NoError(t, err)
+	defer receiver.Close()
+	_, port, err := net.SplitHostPort(receiver.LocalAddr().String())
+	require.NoError(t, err)
+	addresses := make(map[string]net.Addr)
+	for _, host := range []string{"cached.invalid", "slow.invalid", "new.invalid"} {
+		addresses[host], err = transport.MakeNetAddr("udp", net.JoinHostPort(host, port))
+		require.NoError(t, err)
+	}
+	started := make(chan struct{})
+	release := make(chan struct{})
+	var cachedLookups atomic.Int32
+	c := conn.(*resolvingUDPConn)
+	c.lookup = func(ctx context.Context, host string) ([]net.IPAddr, error) {
+		if host == "cached.invalid" {
+			cachedLookups.Add(1)
+		}
+		if host == "slow.invalid" {
+			close(started)
+			select {
+			case <-release:
+			case <-ctx.Done():
+				return nil, ctx.Err()
+			}
+		}
+		return []net.IPAddr{{IP: net.IPv4(127, 0, 0, 1)}}, nil
+	}
+	_, err = conn.WriteTo([]byte("prime cache"), addresses["cached.invalid"])
+	require.NoError(t, err)
+	slowDone := make(chan error, 1)
+	go func() {
+		_, err := conn.WriteTo([]byte("slow"), addresses["slow.invalid"])
+		slowDone <- err
+	}()
+	select {
+	case <-started:
+	case <-time.After(time.Second):
+		t.Fatal("slow lookup did not start")
+	}
+	// Both a cache hit and a new lookup must finish while the slow one is blocked.
+	done := make(chan error, 2)
+	for _, host := range []string{"cached.invalid", "new.invalid"} {
+		go func() {
+			_, err := conn.WriteTo([]byte(host), addresses[host])
+			done <- err
+		}()
+	}
+	for range 2 {
+		select {
+		case err := <-done:
+			require.NoError(t, err)
+		case <-time.After(time.Second):
+			t.Fatal("slow lookup blocked an unrelated destination")
+		}
+	}
+	require.EqualValues(t, 1, cachedLookups.Load())
+	close(release)
+	select {
+	case err := <-slowDone:
+		require.NoError(t, err)
+	case <-time.After(time.Second):
+		t.Fatal("released lookup did not finish")
+	}
 }

@@ -234,6 +234,10 @@ func main() {
 			Conn: packetconn.Generic{PacketConn: conn},
 		}
 		defer conn.Close()
+		// The listener's setup context does not own the returned connection.
+		// Fetch owns it for this request, so close it on timeout to cancel DNS too.
+		stopClose := context.AfterFunc(ctx, func() { _ = conn.Close() })
+		defer stopClose()
 		defer quicTransport.Close()
 		httpTransport := &http3.Transport{
 			TLSClientConfig: &tlsConfig,
