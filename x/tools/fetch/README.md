@@ -13,9 +13,6 @@ The tool logs the negotiated QUIC version and wire codepoint after a successful
 HTTP/3 request. Use `1,2` (the default) to prefer v1, or `2,1` to prefer v2
 while allowing fallback through version negotiation.
 
-With `-proto h3`, fetch resolves destination hostnames locally only when the
-packet connection is a raw `*net.UDPConn`. SOCKS5 and Shadowsocks receive the
-hostname and can resolve it at the proxy. IP destinations are passed through.
 `-address` can override the destination with either a hostname or an IP; the URL
 still determines TLS SNI and certificate verification.
 
