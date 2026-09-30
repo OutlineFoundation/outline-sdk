@@ -29,6 +29,9 @@ import (
 	"golang.getoutline.org/sdk/x/quicprelude"
 )
 
+// Concurrent writes to one hostname must use one DNS answer and reach the same
+// receiver. Returning IPv6 first also checks that the adapter prefers IPv4 when
+// available. A final write to an IP address must bypass DNS entirely.
 func TestDirectUDPResolvesAndPinsHostname(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
@@ -38,6 +41,8 @@ func TestDirectUDPResolvesAndPinsHostname(t *testing.T) {
 	conn, err := (resolvingUDPListener{}).ListenPacket(ctx)
 	require.NoError(t, err)
 	defer conn.Close()
+	// Exposing QUIC-Go's optimized interface would bypass WriteTo and panic on
+	// a domain address, even if the direct WriteTo calls below succeeded.
 	_, optimized := conn.(quic.OOBCapablePacketConn)
 	require.False(t, optimized, "QUIC-Go must call WriteTo for unresolved addresses")
 	c := conn.(*resolvingUDPConn)
@@ -83,6 +88,8 @@ func TestDirectUDPResolvesAndPinsHostname(t *testing.T) {
 	require.NoError(t, err)
 }
 
+// Closing a packet connection must unblock a WriteTo that is waiting for DNS.
+// The injected lookup waits only for cancellation, avoiding a real DNS timeout.
 func TestDirectUDPResolutionCancelledOnClose(t *testing.T) {
 	conn, err := (resolvingUDPListener{}).ListenPacket(context.Background())
 	require.NoError(t, err)
@@ -97,7 +104,11 @@ func TestDirectUDPResolutionCancelledOnClose(t *testing.T) {
 	addr, err := transport.MakeNetAddr("udp", "blocked.invalid:443")
 	require.NoError(t, err)
 	done := make(chan error, 1)
-	go func() { _, err := conn.WriteTo([]byte("hello"), addr); done <- err }()
+	go func() {
+		_, err := conn.WriteTo([]byte("hello"), addr)
+		done <- err
+	}()
+	// Wait until WriteTo is inside the lookup before closing the connection.
 	select {
 	case <-started:
 	case <-time.After(time.Second):
@@ -112,6 +123,8 @@ func TestDirectUDPResolutionCancelledOnClose(t *testing.T) {
 	}
 }
 
+// Resolver errors and empty answers must reach the caller without being cached.
+// Retry the same destination after each failure, then let its lookup succeed.
 func TestDirectUDPResolutionFailure(t *testing.T) {
 	conn, err := (resolvingUDPListener{}).ListenPacket(context.Background())
 	require.NoError(t, err)
@@ -135,6 +148,9 @@ func TestDirectUDPResolutionFailure(t *testing.T) {
 	require.Equal(t, "127.0.0.1:443", resolved.String())
 }
 
+// ListenPacket's context controls setup, not the lifetime of the connection.
+// Cancel it before the first write and verify DNS still runs without inheriting
+// its cancellation or deadline, and the datagram reaches the receiver.
 func TestDirectUDPResolutionOutlivesSetupContext(t *testing.T) {
 	setupCtx, cancelSetup := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancelSetup()
@@ -169,6 +185,9 @@ func TestDirectUDPResolutionOutlivesSetupContext(t *testing.T) {
 	require.Equal(t, "after setup", string(buf[:n]))
 }
 
+// A blocked lookup must not hold a connection-wide lock. While one destination's
+// lookup is paused, writes to both an already cached name and a new name must
+// finish. The cached name must not be looked up again.
 func TestDirectUDPSlowLookupDoesNotBlockOtherDestinations(t *testing.T) {
 	conn, err := (resolvingUDPListener{}).ListenPacket(context.Background())
 	require.NoError(t, err)
@@ -203,6 +222,7 @@ func TestDirectUDPSlowLookupDoesNotBlockOtherDestinations(t *testing.T) {
 	}
 	_, err = conn.WriteTo([]byte("prime cache"), addresses["cached.invalid"])
 	require.NoError(t, err)
+	// Keep slow.invalid blocked until both unrelated writes have completed.
 	slowDone := make(chan error, 1)
 	go func() {
 		_, err := conn.WriteTo([]byte("slow"), addresses["slow.invalid"])
@@ -239,12 +259,17 @@ func TestDirectUDPSlowLookupDoesNotBlockOtherDestinations(t *testing.T) {
 	}
 }
 
+// Adapt a test callback so quicprelude can wrap our connection with injected DNS.
 type packetListenerFunc func(context.Context) (net.PacketConn, error)
 
 func (f packetListenerFunc) ListenPacket(ctx context.Context) (net.PacketConn, error) {
 	return f(ctx)
 }
 
+// A quicprelude wrapper hides the concrete UDP connection from the caller.
+// Resolving at the base listener must still deliver its prelude and the original
+// Initial to the same destination, in order, with one DNS lookup and one source
+// address. This covers the case missed when only bare UDPConns were resolved.
 func TestQUICPreludeResolvesHostnameAtBaseListener(t *testing.T) {
 	receiver, err := net.ListenPacket("udp", "127.0.0.1:0")
 	require.NoError(t, err)
@@ -261,13 +286,16 @@ func TestQUICPreludeResolvesHostnameAtBaseListener(t *testing.T) {
 	require.NoError(t, err)
 	addr, err := transport.MakeNetAddr("udp", net.JoinHostPort("prelude.invalid", port))
 	require.NoError(t, err)
-	listener, err := quicprelude.NewConfig().WithGenerator(func(input quicprelude.GeneratorInput) ([][]byte, error) {
+	// Use a recognizable prelude so we can distinguish it from the QUIC packet.
+	listener, err := quicprelude.NewConfig().WithGenerator(func(quicprelude.GeneratorInput) ([][]byte, error) {
 		return [][]byte{[]byte("prelude")}, nil
 	}).NewPacketListener(packetListenerFunc(func(context.Context) (net.PacketConn, error) { return base, nil }))
 	require.NoError(t, err)
 	conn, err := listener.ListenPacket(context.Background())
 	require.NoError(t, err)
 	defer conn.Close()
+	// Only the Initial header is needed to trigger the prelude; its deliberately
+	// invalid encrypted payload is fine because the receiver is a raw UDP socket.
 	version, err := quicprelude.FixedVersion(quicprelude.Version2)
 	require.NoError(t, err)
 	initial, err := quicprelude.InvalidInitial(version, quicprelude.DefaultLength)
@@ -278,6 +306,7 @@ func TestQUICPreludeResolvesHostnameAtBaseListener(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, len(packets[0]), n)
 	require.EqualValues(t, 1, lookups.Load(), "the prelude and Initial must share one answer")
+	// Read both datagrams and compare their source IP and port to check the flow.
 	require.NoError(t, receiver.SetReadDeadline(time.Now().Add(time.Second)))
 	var source string
 	for _, want := range [][]byte{[]byte("prelude"), packets[0]} {
