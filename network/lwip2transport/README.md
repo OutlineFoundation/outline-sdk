@@ -96,7 +96,7 @@ sequenceDiagram
         RW->>LWIP: udpConn.WriteFrom(payload, srcAddr)
         Note over LWIP: udpConn calls C.udp_sendto().<br/>LwIP encapsulates UDP payload<br/>into an IP packet using<br/>associated local IP.
         LWIP->>Dev: forwardOutgoingIPPacket(ipPacket)
-        Note over Dev: Pushes IP packet to d.rdBuf channel.
+        Note over Dev: Copies the IP packet and pushes it<br/>to the buffered d.rdBuf channel.
     end
 
     Dev-->>App: Unblocks, returns IP packet
@@ -123,7 +123,11 @@ The writer resolves the source address and calls `WriteFrom` on the underlying `
 Once LwIP constructs the IP packet, it calls its registered output callback: `forwardOutgoingIPPacket` (registered with `lwip.RegisterOutputFn`).
 
 #### 6. Sent to `lwIPDevice` Read Channel
-`forwardOutgoingIPPacket` writes the resulting IP packet into the `lwIPDevice`'s `d.rdBuf` channel. 
+`forwardOutgoingIPPacket` copies the resulting IP packet into a pooled buffer and pushes it onto the `lwIPDevice`'s buffered `d.rdBuf` channel, returning without waiting for the consumer.
+
+Both properties matter. The copy is required because the packet aliases the C pbuf payload, which LwIP frees as soon as the output callback returns. Returning without waiting is required because **LwIP calls this callback while holding its global stack lock**, which the inbound path also needs for every packet passed to `stack.Write` — waiting for the consumer here serializes the whole stack behind the consumer's write and starves the reader. Once `d.rdBuf` is full the callback does block, which is intended backpressure: the consumer is genuinely slower than the stack is producing.
+
+Consumers take the packet either through `Read`, or through `lwIPDevice.WriteTo(w)` which writes each packet to `w` on the caller's own goroutine (this is what the Outline clients do with their TUN file). Whichever path is used, the buffer is returned to the pool afterwards. 
 
 #### 7. Read by App & Written to TUN
 The blocked `lwIPDevice.Read()` call (from Step 1) unblocks, copies the packet from `d.rdBuf`, and returns it to the application loop. The application then writes this complete IP packet back to the host OS local TUN interface.
