@@ -30,7 +30,7 @@ func resolveIP(ctx context.Context, resolver Resolver, rrType dnsmessage.Type, h
 	if err != nil {
 		return nil, err
 	}
-	response, err := resolver.Query(ctx, *q)
+	response, err := resolver.Query(ctx, q)
 	if err != nil {
 		return nil, err
 	}
