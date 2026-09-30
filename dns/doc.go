@@ -45,5 +45,13 @@ in parallel, as per the [Happy Eyeballs v2] algorithm.
 [DNS-over-TLS]: https://datatracker.ietf.org/doc/html/rfc7858
 [DNS-over-HTTPS]: https://datatracker.ietf.org/doc/html/rfc8484
 [Happy Eyeballs v2]: https://datatracker.ietf.org/doc/html/rfc8305
+
+# RawResolver
+
+The [RawResolver] interface provides a lower-level primitive operating directly on wire-format byte arrays and primitive types (domain name, query type, and an output buffer). This design serves three main purposes:
+
+ 1. Zero-dependency footprint: Bypassing rigid DNS parsing libraries allows Outline to pack esoteric labels natively natively (e.g. obscure DNS tunneling headers).
+ 2. Future-proof compatibility: Callers can inject or parse the raw responses using any external library, including those supporting newer record types.
+ 3. Zero-allocation cycles: Providing a reusable `buf []byte` hands memory management to the caller, removing slice allocations in the hot path.
 */
 package dns

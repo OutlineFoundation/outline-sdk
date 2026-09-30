@@ -72,13 +72,35 @@ func TestNewQuestionLongName(t *testing.T) {
 	require.Error(t, err)
 }
 
-func Test_appendRequest(t *testing.T) {
-	q, err := NewQuestion(".", dnsmessage.TypeAAAA)
-	require.NoError(t, err)
+func Test_appendName(t *testing.T) {
+	serialize := func(domain string) []byte {
+		buf, err := appendName(nil, domain)
+		require.NoError(t, err)
+		return buf
+	}
+	serializeErr := func(domain string) {
+		_, err := appendName(nil, domain)
+		require.Error(t, err)
+	}
 
+	require.Equal(t, []byte("\x00"), serialize(""), "Empty")
+	require.Equal(t, []byte("\x00"), serialize("."), "Root")
+	require.Equal(t, []byte("\x07example\x03com\x00"), serialize("example.com."), "FQDN")
+	require.Equal(t, []byte("\x07example\x03com\x00"), serialize("example.com"), "NoTrailingDot")
+	require.Equal(t, []byte("\x07foo.bar\x03com\x00"), serialize("foo\\.bar.com."), "DotInLabel")
+	require.Equal(t, []byte("\x07foo\\bar\x03com\x00"), serialize("foo\\\\bar.com."), "BackslashInLabel")
+	
+	require.Equal(t, append(append([]byte{63}, strings.Repeat("a", 63)...), []byte("\x03com\x00")...), serialize(strings.Repeat("a", 63)+".com."), "MaxLengthLabel")
+
+	serializeErr(strings.Repeat("a", 64) + ".com") // LongLabel
+	serializeErr("example..com")                   // EmptyLabel
+	serializeErr(strings.Repeat("a.", 128))        // NameTooLong
+}
+
+func Test_appendRequestRaw(t *testing.T) {
 	id := uint16(1234)
 	offset := 2
-	buf, err := appendRequest(id, *q, make([]byte, offset))
+	buf, err := appendRequestRaw(id, ".", uint16(dnsmessage.TypeAAAA), make([]byte, offset, maxUDPMessageSize))
 	require.NoError(t, err)
 	require.Equal(t, make([]byte, offset), buf[:offset])
 
@@ -92,7 +114,9 @@ func Test_appendRequest(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, id, request.ID)
 	require.Equal(t, 1, len(request.Questions))
-	require.Equal(t, *q, request.Questions[0])
+	expectedQ, err := NewQuestion(".", dnsmessage.TypeAAAA)
+	require.NoError(t, err)
+	require.Equal(t, *expectedQ, request.Questions[0])
 	require.Equal(t, 0, len(request.Answers))
 	require.Equal(t, 0, len(request.Authorities))
 	// ENDS(0) OPT resource record.
@@ -126,57 +150,49 @@ func Test_equalASCIIName(t *testing.T) {
 	require.False(t, equalASCIIName(dnsmessage.MustNewName("example.com"), dnsmessage.MustNewName("myexample.com")))
 }
 
-func Test_checkResponse(t *testing.T) {
+func Test_checkResponseRaw(t *testing.T) {
 	reqID := uint16(rand.Uint32())
-	reqQ := dnsmessage.Question{
-		Name:  dnsmessage.MustNewName("example.com."),
-		Type:  dnsmessage.TypeAAAA,
-		Class: dnsmessage.ClassINET,
+	const reqName = "example.com."
+	const reqType = dnsmessage.TypeAAAA
+	
+	makeResp := func(id uint16, respBit bool, qname string, qtype dnsmessage.Type) []byte {
+		buf, _ := appendRequestRaw(id, qname, uint16(qtype), nil)
+		if respBit {
+			buf[2] |= 0x80
+		}
+		return buf
 	}
-	expectedHdr := dnsmessage.Header{ID: reqID, Response: true}
-	expectedQs := []dnsmessage.Question{reqQ}
+
 	t.Run("Match", func(t *testing.T) {
-		err := checkResponse(reqID, reqQ, expectedHdr, expectedQs)
+		err := checkResponseRaw(reqID, reqName, uint16(reqType), makeResp(reqID, true, reqName, reqType))
 		require.NoError(t, err)
 	})
 	t.Run("CaseInsensitive", func(t *testing.T) {
-		mixedQ := reqQ
-		mixedQ.Name = dnsmessage.MustNewName("Example.Com.")
-		err := checkResponse(reqID, reqQ, expectedHdr, []dnsmessage.Question{mixedQ})
+		err := checkResponseRaw(reqID, reqName, uint16(reqType), makeResp(reqID, true, "Example.Com.", reqType))
 		require.NoError(t, err)
 	})
 	t.Run("NotResponse", func(t *testing.T) {
-		badHdr := expectedHdr
-		badHdr.Response = false
-		err := checkResponse(reqID, reqQ, badHdr, expectedQs)
+		err := checkResponseRaw(reqID, reqName, uint16(reqType), makeResp(reqID, false, reqName, reqType))
 		require.Error(t, err)
 	})
 	t.Run("BadID", func(t *testing.T) {
-		badHdr := expectedHdr
-		badHdr.ID = reqID + 1
-		err := checkResponse(reqID, reqQ, badHdr, expectedQs)
+		err := checkResponseRaw(reqID, reqName, uint16(reqType), makeResp(reqID+1, true, reqName, reqType))
 		require.Error(t, err)
 	})
 	t.Run("NoQuestions", func(t *testing.T) {
-		err := checkResponse(reqID, reqQ, expectedHdr, []dnsmessage.Question{})
+		raw := makeResp(reqID, true, reqName, reqType)
+		// set QDCOUNT to 0
+		raw[4] = 0
+		raw[5] = 0
+		err := checkResponseRaw(reqID, reqName, uint16(reqType), raw)
 		require.Error(t, err)
 	})
 	t.Run("BadQuestionType", func(t *testing.T) {
-		badQ := reqQ
-		badQ.Type = dnsmessage.TypeA
-		err := checkResponse(reqID, reqQ, expectedHdr, []dnsmessage.Question{badQ})
-		require.Error(t, err)
-	})
-	t.Run("BadQuestionClass", func(t *testing.T) {
-		badQ := reqQ
-		badQ.Class = dnsmessage.ClassCHAOS
-		err := checkResponse(reqID, reqQ, expectedHdr, []dnsmessage.Question{badQ})
+		err := checkResponseRaw(reqID, reqName, uint16(reqType), makeResp(reqID, true, reqName, dnsmessage.TypeA))
 		require.Error(t, err)
 	})
 	t.Run("BadQuestionName", func(t *testing.T) {
-		badQ := reqQ
-		badQ.Name = dnsmessage.MustNewName("notexample.invalid.")
-		err := checkResponse(reqID, reqQ, expectedHdr, []dnsmessage.Question{badQ})
+		err := checkResponseRaw(reqID, reqName, uint16(reqType), makeResp(reqID, true, "notexample.invalid.", reqType))
 		require.Error(t, err)
 	})
 }
@@ -200,18 +216,16 @@ func newMessageResponse(req dnsmessage.Message, answer dnsmessage.ResourceBody, 
 }
 
 type queryResult struct {
-	msg *dnsmessage.Message
-	err error
+	data []byte
+	err  error
 }
 
-func testDatagramExchange(t *testing.T, server func(request dnsmessage.Message, conn net.Conn)) (*dnsmessage.Message, error) {
+func testDatagramExchange(t *testing.T, server func(request dnsmessage.Message, conn net.Conn)) ([]byte, error) {
 	front, back := net.Pipe()
-	q, err := NewQuestion("example.com.", dnsmessage.TypeAAAA)
-	require.NoError(t, err)
 	clientDone := make(chan queryResult)
 	go func() {
-		msg, err := queryDatagram(front, *q)
-		clientDone <- queryResult{msg, err}
+		data, err := queryDatagram(front, "example.com.", uint16(dnsmessage.TypeAAAA), make([]byte, 0, maxUDPMessageSize))
+		clientDone <- queryResult{data, err}
 	}()
 	// Read request.
 	buf := make([]byte, 512)
@@ -222,20 +236,20 @@ func testDatagramExchange(t *testing.T, server func(request dnsmessage.Message, 
 	var reqMsg dnsmessage.Message
 	reqMsg.Unpack(buf)
 	reqID := reqMsg.ID
-	expectedBuf, err := appendRequest(reqID, *q, make([]byte, 0, 512))
+	expectedBuf, err := appendRequestRaw(reqID, "example.com.", uint16(dnsmessage.TypeAAAA), make([]byte, 0, maxUDPMessageSize))
 	require.NoError(t, err)
 	require.Equal(t, expectedBuf, buf)
 
 	server(reqMsg, back)
 
 	result := <-clientDone
-	return result.msg, result.err
+	return result.data, result.err
 }
 
 func Test_queryDatagram(t *testing.T) {
 	t.Run("Success", func(t *testing.T) {
 		var respSent dnsmessage.Message
-		respRcvd, err := testDatagramExchange(t, func(req dnsmessage.Message, conn net.Conn) {
+		rawResp, err := testDatagramExchange(t, func(req dnsmessage.Message, conn net.Conn) {
 			// Send bogus response.
 			_, err := conn.Write([]byte{0, 0})
 			require.NoError(t, err)
@@ -259,8 +273,10 @@ func Test_queryDatagram(t *testing.T) {
 			require.NoError(t, err)
 		})
 		require.NoError(t, err)
-		require.NotNil(t, respRcvd)
-		require.Equal(t, respSent, *respRcvd)
+		require.NotNil(t, rawResp)
+		var respRcvd dnsmessage.Message
+		require.NoError(t, respRcvd.Unpack(rawResp))
+		require.Equal(t, respSent, respRcvd)
 	})
 	t.Run("BadResponse", func(t *testing.T) {
 		_, err := testDatagramExchange(t, func(req dnsmessage.Message, conn net.Conn) {
@@ -277,12 +293,10 @@ func Test_queryDatagram(t *testing.T) {
 	t.Run("FailedClientWrite", func(t *testing.T) {
 		front, back := net.Pipe()
 		back.Close()
-		q, err := NewQuestion("example.com.", dnsmessage.TypeAAAA)
-		require.NoError(t, err)
 		clientDone := make(chan queryResult)
 		go func() {
-			msg, err := queryDatagram(front, *q)
-			clientDone <- queryResult{msg, err}
+			data, err := queryDatagram(front, "example.com.", uint16(dnsmessage.TypeAAAA), make([]byte, 0, 512))
+			clientDone <- queryResult{data, err}
 		}()
 		// Wait for queryDatagram.
 		result := <-clientDone
@@ -291,12 +305,10 @@ func Test_queryDatagram(t *testing.T) {
 	})
 	t.Run("FailedClientRead", func(t *testing.T) {
 		front, back := net.Pipe()
-		q, err := NewQuestion("example.com.", dnsmessage.TypeAAAA)
-		require.NoError(t, err)
 		clientDone := make(chan queryResult)
 		go func() {
-			msg, err := queryDatagram(front, *q)
-			clientDone <- queryResult{msg, err}
+			data, err := queryDatagram(front, "example.com.", uint16(dnsmessage.TypeAAAA), make([]byte, 0, 512))
+			clientDone <- queryResult{data, err}
 		}()
 		back.Read(make([]byte, 521))
 		back.Close()
@@ -307,14 +319,12 @@ func Test_queryDatagram(t *testing.T) {
 	})
 }
 
-func testStreamExchange(t *testing.T, server func(request dnsmessage.Message, conn net.Conn)) (*dnsmessage.Message, error) {
+func testStreamExchange(t *testing.T, server func(request dnsmessage.Message, conn net.Conn)) ([]byte, error) {
 	front, back := net.Pipe()
-	q, err := NewQuestion("example.com.", dnsmessage.TypeAAAA)
-	require.NoError(t, err)
 	clientDone := make(chan queryResult)
 	go func() {
-		msg, err := queryStream(front, *q)
-		clientDone <- queryResult{msg, err}
+		data, err := queryStream(front, "example.com.", uint16(dnsmessage.TypeAAAA), make([]byte, 2, 514))
+		clientDone <- queryResult{data, err}
 	}()
 	// Read request.
 	var msgLen uint16
@@ -327,20 +337,20 @@ func testStreamExchange(t *testing.T, server func(request dnsmessage.Message, co
 	var reqMsg dnsmessage.Message
 	reqMsg.Unpack(buf)
 	reqID := reqMsg.ID
-	expectedBuf, err := appendRequest(reqID, *q, make([]byte, 0, 512))
+	expectedBuf, err := appendRequestRaw(reqID, "example.com.", uint16(dnsmessage.TypeAAAA), make([]byte, 0, 514))
 	require.NoError(t, err)
 	require.Equal(t, expectedBuf, buf)
 
 	server(reqMsg, back)
 
 	result := <-clientDone
-	return result.msg, result.err
+	return result.data, result.err
 }
 
 func Test_queryStream(t *testing.T) {
 	t.Run("Success", func(t *testing.T) {
 		var respSent dnsmessage.Message
-		respRcvd, err := testStreamExchange(t, func(req dnsmessage.Message, conn net.Conn) {
+		rawResp, err := testStreamExchange(t, func(req dnsmessage.Message, conn net.Conn) {
 			var err error
 			// Prepare response message.
 			respSent, err = newMessageResponse(req, &dnsmessage.AAAAResource{AAAA: [16]byte(net.IPv6loopback)}, 100)
@@ -354,8 +364,10 @@ func Test_queryStream(t *testing.T) {
 			require.NoError(t, err)
 		})
 		require.NoError(t, err)
-		require.NotNil(t, respRcvd)
-		require.Equal(t, respSent, *respRcvd)
+		require.NotNil(t, rawResp)
+		var respRcvd dnsmessage.Message
+		require.NoError(t, respRcvd.Unpack(rawResp))
+		require.Equal(t, respSent, respRcvd)
 	})
 	t.Run("ShortRead", func(t *testing.T) {
 		_, err := testStreamExchange(t, func(req dnsmessage.Message, conn net.Conn) {
@@ -412,12 +424,10 @@ func Test_queryStream(t *testing.T) {
 	t.Run("FailedClientWrite", func(t *testing.T) {
 		front, back := net.Pipe()
 		back.Close()
-		q, err := NewQuestion("example.com.", dnsmessage.TypeAAAA)
-		require.NoError(t, err)
 		clientDone := make(chan queryResult)
 		go func() {
-			msg, err := queryStream(front, *q)
-			clientDone <- queryResult{msg, err}
+			data, err := queryStream(front, "example.com.", uint16(dnsmessage.TypeAAAA), make([]byte, 2, 514))
+			clientDone <- queryResult{data, err}
 		}()
 		// Wait for client.
 		result := <-clientDone
@@ -426,12 +436,10 @@ func Test_queryStream(t *testing.T) {
 	})
 	t.Run("FailedClientRead", func(t *testing.T) {
 		front, back := net.Pipe()
-		q, err := NewQuestion("example.com.", dnsmessage.TypeAAAA)
-		require.NoError(t, err)
 		clientDone := make(chan queryResult)
 		go func() {
-			msg, err := queryStream(front, *q)
-			clientDone <- queryResult{msg, err}
+			data, err := queryStream(front, "example.com.", uint16(dnsmessage.TypeAAAA), make([]byte, 2, 514))
+			clientDone <- queryResult{data, err}
 		}()
 		back.Read(make([]byte, 521))
 		back.Close()
