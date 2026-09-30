@@ -20,6 +20,8 @@ import (
 	"github.com/quic-go/quic-go"
 )
 
+// Accept supported numeric versions in the caller's preferred order, ignoring
+// surrounding spaces, and reject empty, unknown, or duplicate versions.
 func TestParseQUICVersions(t *testing.T) {
 	tests := []struct {
 		name    string
