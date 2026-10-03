@@ -13,63 +13,74 @@
 // limitations under the License.
 
 /*
-Package dnsintercept provides a specialized PacketRelay that transparently intercepts
-and routes UDP DNS queries to a dedicated upstream DNS relay, while forwarding all
-other UDP traffic to a default relay.
+Package dnsintercept provides a [packetrelay.PacketRelay] decorator that intercepts the UDP
+DNS queries addressed to a given resolver address and answers them with a [dns.Exchanger],
+forwarding all other UDP traffic to a default relay.
 
-The primary use case is in environments where local DNS traffic (e.g., directed at
-a local stub resolver or gateway address) needs to be routed over a distinct transport
-mechanism (like a proxy or a secure tunnel) to a remote DNS server, while non-DNS UDP
-traffic follows a different path.
+The typical setup is a VPN or a TUN device that advertises a resolver address to the system
+(a gateway or a stub resolver address that doesn't really exist on the network), and must
+answer the queries sent to it. Who answers, and how, is the caller's choice: an app tunneling
+everything to a proxy forwards the queries to a remote resolver, while an app that encrypts
+DNS answers them in-process over DNS-over-HTTPS. Both get the same interception machinery,
+because both are just a [dns.Exchanger].
 
 # Traffic Routing and Interception
 
-The [InterceptDNSPacketRelay] makes routing decisions based strictly on the destination
-address of outgoing packets:
+Routing decisions are made strictly on the destination address of outgoing packets:
 
- 1. Intercepted DNS Traffic: If a packet is destined for the configured `dnsLocalResolver`
-    address, it is treated as an intercepted DNS query. The packet's destination is
-    rewritten to the configured `dnsRemoteResolver`, and it is forwarded through the
-    `dnsRelay`.
+ 1. Intercepted DNS traffic: a packet addressed to localResolver is handed to the
+    [dns.Exchanger] as a wire-format DNS query. Addresses are compared with IPv4 and
+    IPv4-mapped IPv6 forms treated as equal, because some network stacks surface IPv4 UDP
+    destinations in mapped form.
 
- 2. Default Traffic: Any packet not destined for the `dnsLocalResolver` is passed
-    unmodified to the `defaultRelay`.
+ 2. Default traffic: any other packet is passed unmodified to the default relay.
+
+The response returned by the Exchanger is delivered to the handler of the association that
+sent the query, with localResolver as the source address. The client therefore sees an answer
+coming from the resolver it queried, and never learns that the query was intercepted. The
+response bytes are delivered as the Exchanger returned them: matching the response to the
+query is up to whoever produced the query.
+
+# Exchange Lifecycle
+
+Queries are dispatched to the Exchanger on their own goroutine, so sending a packet never
+blocks on a resolution:
+
+  - [packetrelay.PacketSender.SendPacket] returns as soon as the query is dispatched, and
+    cannot report a failed exchange. Failures (including an empty response, which is dropped
+    rather than delivered) are reported to the function installed with [WithErrorHandler], to
+    be logged or counted. The default handler does nothing.
+
+  - Each exchange gets a context that is canceled when the association closes, so closing the
+    association cancels the queries still in flight.
+
+  - Timeouts belong to the Exchanger. This package imposes none: a query with no answer ends
+    when the Exchanger gives up. [NewPacketRelayExchanger] inherits the idle timeout of the
+    relay it is given (see [packetrelay.NewPacketRelayFromPacketListener]), and the exchangers
+    built on HTTP or TLS have timeouts of their own.
 
 # Association Lifecycle and Resource Management
 
-To handle the stateless nature of UDP DNS queries effectively, the intercept relay
-employs distinct lifecycle strategies for its sub-associations:
+  - Lazy default association: a single association is created on the default relay the first
+    time a non-DNS packet is sent, and all subsequent non-DNS traffic is multiplexed over it.
+    It is never created for an association that only carries DNS.
 
-  - Short-lived DNS Associations: For every intercepted DNS query, a brand new,
-    ephemeral association is spun up on the `dnsRelay`. A background goroutine
-    listens for a single corresponding response. Once the response is received and
-    forwarded back to the caller (with its source address rewritten back to the
-    `dnsLocalResolver`), this short-lived sub-association is immediately closed.
-    This prevents port exhaustion and aligns with standard DNS proxy behaviors.
-    Concretely, this mirrors how the OS itself handles DNS: a typical stub
-    resolver opens a fresh ephemeral UDP source port per query and does not
-    multiplex other UDP traffic onto it. The per-query teardown keeps our
-    upstream association lifetime in step with that OS-side socket lifetime,
-    which is also why the `dnsRelay` is typically configured with a much shorter
-    idle timeout (on the order of seconds) than the `defaultRelay` (minutes).
+  - Auto-termination: the parent association reference-counts its activity — the default
+    sub-association and each in-flight exchange. Once all of it has ceased, the parent closes
+    itself, releasing its resources and goroutines. This matters because the OS typically
+    opens a fresh ephemeral UDP source port per DNS query: those associations exist only for
+    as long as the query they carry.
 
-  - Lazy Default Association: For all other traffic, a single long-lived association
-    is lazily created on the `defaultRelay` the first time a non-DNS packet is sent.
-    All subsequent non-DNS traffic is multiplexed over this single association.
+  - Closing the parent association (with [packetrelay.PacketSender.Close]) closes the default
+    sub-association and cancels the in-flight exchanges. Closing it twice, or using it after
+    it is closed, returns [packetrelay.ErrClosed].
 
-  - Auto-Termination: The parent association tracks the active sub-associations using
-    an internal acquire/release reference counting mechanism. Once all activity has
-    ceased—meaning the default association has been closed and all pending DNS queries
-    have either completed or timed out—the parent association automatically closes
-    itself, safely releasing all internal resources and goroutines.
+# Forwarding to a Remote Resolver
 
-# Important Considerations
-
-Timeout Protection: Because DNS queries use UDP, they may silently drop. If an upstream
-resolver or the network drops a DNS query, the short-lived DNS sub-association will wait
-indefinitely for a response. Callers MUST ensure that the `dnsRelay` provided to the
-constructor is wrapped with a mechanism (such as the `packetrelay.TimeoutPacketRelay`)
-that enforces a strict deadline, forcing the underlying association to close if a
-response is not received in a timely manner.
+[NewPacketRelayExchanger] is the Exchanger that forwards queries to a remote resolver over
+another [packetrelay.PacketRelay] — the behavior this package used to hardcode. It uses one
+short-lived sub-association per query, closed as soon as the answer arrives, which keeps the
+upstream association lifetime in step with the OS-side socket lifetime. That relay is usually
+configured with a much shorter idle timeout (seconds) than the default relay (minutes).
 */
 package dnsintercept
