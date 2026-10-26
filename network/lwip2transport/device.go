@@ -18,6 +18,7 @@ import (
 	"errors"
 	"io"
 	"sync"
+	"time"
 
 	lwip "github.com/eycorsican/go-tun2socks/core"
 	"golang.getoutline.org/sdk/network"
@@ -26,6 +27,11 @@ import (
 )
 
 const packetMTU = 1500
+
+// halfCloseTimeout limits how long a peer can leave a relay half-closed.
+// Match FreeBSD's default 60-second FIN_WAIT_2 timeout for orphaned sockets:
+// https://man.freebsd.org/cgi/man.cgi?query=tcp (fast_finwait2_recycle).
+const halfCloseTimeout = 60 * time.Second
 
 // Compilation guard against interface implementation
 var _ network.IPDevice = (*lwIPDevice)(nil)
@@ -81,7 +87,7 @@ func ConfigureDevice(sd transport.StreamDialer, pp network.PacketProxy) (network
 		inst.Close()
 	}
 	inst = &lwIPDevice{
-		tcp:   newTCPHandler(sd),
+		tcp:   newTCPHandler(sd, halfCloseTimeout),
 		udp:   newUDPHandler(pp),
 		stack: lwip.NewLWIPStack(),
 		done:  make(chan struct{}),
@@ -111,7 +117,7 @@ func ConfigureDeviceWithRelay(sd transport.StreamDialer, pr packetrelay.PacketRe
 		inst.Close()
 	}
 	inst = &lwIPDevice{
-		tcp:   newTCPHandler(sd),
+		tcp:   newTCPHandler(sd, halfCloseTimeout),
 		udp:   newUDPRelayHandler(pr),
 		stack: lwip.NewLWIPStack(),
 		done:  make(chan struct{}),
