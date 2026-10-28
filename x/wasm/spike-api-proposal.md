@@ -1,6 +1,6 @@
 # Local API-proposal draft: Wasm transport objects
 
-Status: experimental code and supporting research are included in this SDK checkout on branch `spike/wasm-transports`. This is a local review draft, not an accepted upstream API proposal.
+Status: experimental code and supporting research are included in this SDK checkout on branch `spike-wasm-transports`. This is a local review draft, not an accepted upstream API proposal.
 
 Problem: test whether provider-delivered protocol artifacts can add behavior to Outline SDK stream and packet transports while retaining composition and explicit object ownership.
 
