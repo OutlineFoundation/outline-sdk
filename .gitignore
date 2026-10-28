@@ -27,3 +27,6 @@ output-metadata.json
 # Tasks
 .task
 out
+
+# Local Wasm spike executables
+/bin/

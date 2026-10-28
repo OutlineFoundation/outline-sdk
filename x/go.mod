@@ -1,8 +1,6 @@
 module golang.getoutline.org/sdk/x
 
-go 1.24.1
-
-toolchain go1.24.8
+go 1.25.0
 
 // Due to https://github.com/OutlineFoundation/outline-sdk/issues/501
 retract [v0.0.4, v0.0.6]
@@ -20,12 +18,13 @@ require (
 	github.com/quic-go/quic-go v0.48.1
 	github.com/songgao/water v0.0.0-20200317203138-2b4b6d7c09d8
 	github.com/stretchr/testify v1.9.0
+	github.com/tetratelabs/wazero v1.12.0
 	github.com/things-go/go-socks5 v0.0.5
 	github.com/vishvananda/netlink v1.2.1-beta.2
 	golang.getoutline.org/sdk v0.0.22
 	golang.org/x/mobile v0.0.0-20240520174638-fa72addaaa1b
 	golang.org/x/net v0.44.0
-	golang.org/x/sys v0.36.0
+	golang.org/x/sys v0.44.0
 	golang.org/x/term v0.35.0
 )
 

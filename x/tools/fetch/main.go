@@ -35,6 +35,8 @@ import (
 	"github.com/quic-go/quic-go"
 	"github.com/quic-go/quic-go/http3"
 	"golang.getoutline.org/sdk/x/configurl"
+	"golang.getoutline.org/sdk/x/wasm"
+	"golang.getoutline.org/sdk/x/wasmconfig"
 	"golang.org/x/term"
 )
 
@@ -94,8 +96,13 @@ func overrideAddress(original string, newHost string, newPort string) (string, e
 	return net.JoinHostPort(host, port), nil
 }
 
-func main() {
+func main() { os.Exit(run()) }
+
+func run() int {
 	verboseFlag := flag.Bool("v", false, "Enable debug output")
+	var wasmModules stringArrayFlagValue
+	flag.Var(&wasmModules, "wasm-module", "Local trusted Wasm artifact ID=PATH (repeatable; experimental)")
+	wasmCompiler := flag.Bool("wasm-compiler", false, "Use wazero compiler where supported (default interpreter)")
 
 	tlsKeyLogFlag := flag.String("tls-key-log", "", "Filename to write the TLS key log to allow for decryption on Wireshark")
 	echConfigFlag := flag.String("ech-config", "", "Base64-encoded ECH config")
@@ -136,11 +143,37 @@ func main() {
 	if url == "" {
 		slog.Error("Need to pass the URL to fetch in the command-line")
 		flag.Usage()
-		os.Exit(1)
+		return 1
 	}
 	if *protoFlag != "h3" && *quicVersionsFlag != "" {
 		slog.Error("-quic-versions requires -proto h3")
-		os.Exit(1)
+		return 1
+	}
+	providers := configurl.NewDefaultProviders()
+	if len(wasmModules) > 0 {
+		manager := wasm.NewManager(context.Background(), *wasmCompiler)
+		defer manager.Close()
+		scope := wasmconfig.NewScope(manager)
+		defer scope.Close()
+		prepCtx, cancel := context.WithTimeout(context.Background(), time.Duration(*timeoutSecFlag)*time.Second)
+		defer cancel()
+		for _, mapping := range wasmModules {
+			id, filename, ok := strings.Cut(mapping, "=")
+			if !ok || id == "" || filename == "" {
+				slog.Error("Expected -wasm-module ID=PATH")
+				return 1
+			}
+			data, err := readWasmFile(filename)
+			if err == nil {
+				err = scope.Load(prepCtx, id, data)
+			}
+			if err != nil {
+				slog.Error("Could not prepare Wasm artifact", "error", err)
+				return 1
+			}
+		}
+		scope.Register(providers)
+		slog.Debug("Prepared Wasm artifacts", "count", manager.CompiledCount())
 	}
 	httpClient := &http.Client{
 		Timeout: time.Duration(*timeoutSecFlag) * time.Second,
@@ -156,7 +189,7 @@ func main() {
 		echConfigBytes, err := base64.StdEncoding.DecodeString(*echConfigFlag)
 		if err != nil {
 			slog.Error("Failed to decode base64 ECH config", "error", err)
-			os.Exit(1)
+			return 1
 		}
 		tlsConfig.EncryptedClientHelloConfigList = echConfigBytes
 	}
@@ -164,18 +197,17 @@ func main() {
 		f, err := os.Create(*tlsKeyLogFlag)
 		if err != nil {
 			slog.Error("Failed to creare TLS key log file", "error", err)
-			os.Exit(1)
+			return 1
 		}
 		defer f.Close()
 		tlsConfig.KeyLogWriter = f
 	}
 	var quicConn quic.EarlyConnection
-	providers := configurl.NewDefaultProviders()
 	if *protoFlag == "h1" || *protoFlag == "h2" {
 		dialer, err := providers.NewStreamDialer(context.Background(), *transportFlag)
 		if err != nil {
 			slog.Error("Could not create dialer", "error", err)
-			os.Exit(1)
+			return 1
 		}
 		dialContext := func(ctx context.Context, network, addr string) (net.Conn, error) {
 			addressToDial, err := overrideAddress(addr, overrideHost, overridePort)
@@ -210,18 +242,19 @@ func main() {
 		quicVersions, err := parseQUICVersions(quicVersionValue)
 		if err != nil {
 			slog.Error("Invalid QUIC versions", "error", err)
-			os.Exit(1)
+			return 1
 		}
 		listener, err := providers.NewPacketListener(context.Background(), *transportFlag)
 		if err != nil {
 			slog.Error("Could not create listener", "error", err)
-			os.Exit(1)
+			return 1
 		}
 		conn, err := listener.ListenPacket(context.Background())
 		if err != nil {
 			slog.Error("Could not create PacketConn", "error", err)
-			os.Exit(1)
+			return 1
 		}
+		defer conn.Close()
 		quicTransport := &quic.Transport{
 			Conn: conn,
 		}
@@ -252,19 +285,19 @@ func main() {
 		httpClient.Transport = httpTransport
 	} else {
 		slog.Error("Invalid HTTP protocol", "proto", *protoFlag)
-		os.Exit(1)
+		return 1
 	}
 
 	req, err := http.NewRequest(*methodFlag, url, nil)
 	if err != nil {
 		slog.Error("Failed to create request", "error", err)
-		os.Exit(1)
+		return 1
 	}
 	headerText := strings.Join(headersFlag, "\r\n") + "\r\n\r\n"
 	h, err := textproto.NewReader(bufio.NewReader(strings.NewReader(headerText))).ReadMIMEHeader()
 	if err != nil {
 		slog.Error("Invalid header line", "error", err)
-		os.Exit(1)
+		return 1
 	}
 	for name, values := range h {
 		for _, value := range values {
@@ -274,7 +307,7 @@ func main() {
 	resp, err := httpClient.Do(req)
 	if err != nil {
 		slog.Error("HTTP request failed", "error", err)
-		os.Exit(1)
+		return 1
 	}
 	defer resp.Body.Close()
 
@@ -294,6 +327,23 @@ func main() {
 	fmt.Println()
 	if err != nil {
 		slog.Error("Read of page body failed", "error", err)
-		os.Exit(1)
+		return 1
 	}
+	return 0
+}
+
+func readWasmFile(filename string) ([]byte, error) {
+	f, err := os.Open(filename)
+	if err != nil {
+		return nil, err
+	}
+	defer f.Close()
+	data, err := io.ReadAll(io.LimitReader(f, (4<<20)+1))
+	if err != nil {
+		return nil, err
+	}
+	if len(data) > 4<<20 {
+		return nil, fmt.Errorf("wasm artifact exceeds 4 MiB")
+	}
+	return data, nil
 }
