@@ -1,5 +1,9 @@
 # Outline Wasm transport spike
 
+This exploration is inspired by the [WATER project](https://github.com/water-transports/water-go). Its goal is to investigate how WATER and the Outline SDK can work together, drawing on Outline’s experience with composable transports, dependency injection, and explicit object ownership.
+
+The prototype, experimental ABI, and accompanying research are intended to inform that collaboration. They capture integration requirements and design trade-offs for discussion, rather than propose a replacement for WATER. This is exploratory work, not a completed WATER integration or a finalized API.
+
 Local proof of concept, not a released API. One **2.2 KiB freestanding C/Wasm artifact** exposes five named constructors. Explicit sessions contain multiple factory and connection objects. The host uses wazero v1.12.0 (Go 1.25 minimum), defaulting to its interpreter.
 
 | Constructor | Interface | Parameters | Behavior implemented in Wasm |
