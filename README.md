@@ -1,4 +1,4 @@
-> Local Wasm transport spike (`spike-wasm-transports`): implemented fetch proof for streams and packet listeners. See [spike README and research index](x/wasm/README.md), [validation results](x/wasm/spike-results.md), [guest source](x/wasm/examples/bundle.c), and [authoring guide](x/wasm/docs/components.md). Next: expand the ABI for packet addresses and buffered framing, and validate mobile embedding. Upstream project documentation follows.
+> Local Wasm transport spike (`wasm-research`): implemented fetch proof for streams and packet listeners. See [spike README and research index](x/wasm/README.md), [validation results](x/wasm/spike-results.md), [guest source](x/wasm/examples/bundle.c), and [authoring guide](x/wasm/docs/components.md). Next: expand the ABI for packet addresses and buffered framing, and validate mobile embedding. Upstream project documentation follows.
 
 # Outline SDK (Beta)
 

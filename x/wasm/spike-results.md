@@ -1,6 +1,6 @@
 # Fetch Wasm spike results
 
-Implemented and tested locally on 2026-09-24, on Debian x86-64. The isolated [SDK checkout](../../) is on `spike-wasm-transports`, based on `d901c4f1f0ccbd00a93fa07a4e325a5c02bb8ad3`. At the time of validation, no changes were published and the original research checkout was not modified. Research documents and validation logs were consolidated into `x/wasm/` on 2026-10-28; the recorded test results below are from 2026-09-24.
+Implemented and tested locally on 2026-09-24, on Debian x86-64. The isolated [SDK checkout](../../) is on `wasm-research`, based on `d901c4f1f0ccbd00a93fa07a4e325a5c02bb8ad3`. At the time of validation, no changes were published and the original research checkout was not modified. Research documents and validation logs were consolidated into `x/wasm/` on 2026-10-28; the recorded test results below are from 2026-09-24.
 
 ## What the proof establishes
 

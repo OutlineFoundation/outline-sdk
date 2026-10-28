@@ -33,13 +33,13 @@ The design documents describe a broader target than the implemented spike. They 
 
 ## Run by branch name
 
-The branch is named `spike-wasm-transports` so it can be used directly in Go version queries. Once it is published to the upstream Outline SDK repository resolved by `golang.getoutline.org/sdk`, run fetch with Go 1.25 or later:
+The branch is named `wasm-research` so it can be used directly in Go version queries. Run fetch from the upstream Outline SDK branch with Go 1.25 or later:
 
 ```sh
-go run golang.getoutline.org/sdk/x/tools/fetch@spike-wasm-transports -h
+go run golang.getoutline.org/sdk/x/tools/fetch@wasm-research -h
 ```
 
-This command downloads and runs fetch from the branch; it does not copy example Wasm artifacts into your working directory. For the examples below, obtain the artifacts from the same branch and supply their local paths with `-wasm-module`. Until the branch is published, run `go run -C x ./tools/fetch -h` from this SDK checkout.
+This command downloads and runs fetch from the branch; it does not copy example Wasm artifacts into your working directory. For the examples below, obtain the artifacts from the same branch and supply their local paths with `-wasm-module`. To use the local SDK checkout instead, run `go run -C x ./tools/fetch -h` from its root.
 
 ## Reproduce the fetch proof
 
