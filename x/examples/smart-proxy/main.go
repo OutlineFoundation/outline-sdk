@@ -120,7 +120,7 @@ func main() {
 		return packetDialer, nil
 	}
 	configurl.RegisterBase(registry, newPacketDialer)
-	opts := smart.NewStrategyFinderOptions().
+	opts := smart.NewFinderOptions().
 		SetConfigURLRegistry(registry).
 		SetLogWriter(debugLog.Writer()).
 		SetTestTimeout(5 * time.Second)

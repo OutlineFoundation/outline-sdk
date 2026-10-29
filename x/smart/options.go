@@ -25,11 +25,11 @@ import (
 	"golang.getoutline.org/sdk/x/configurl"
 )
 
-// StrategyFinderOptions configures a [StrategyFinder]. Setters collect options;
-// [StrategyFinderOptions.New] validates them. Finish all configuration, including
+// FinderOptions configures a [Finder]. Setters collect options;
+// [FinderOptions.New] validates them. Finish all configuration, including
 // registry and fallback registrations, before calling New. Do not copy options
 // after their first New call. Concurrent New calls are supported after setup.
-type StrategyFinderOptions struct {
+type FinderOptions struct {
 	// testTimeout is the positive timeout for each connectivity test.
 	testTimeout time.Duration
 	// logWriter receives strategy selection logs; nil disables logging.
@@ -52,9 +52,9 @@ type StrategyFinderOptions struct {
 	fallbackParsers map[string]FallbackParser
 }
 
-// NewStrategyFinderOptions creates options with a five-second test timeout.
-func NewStrategyFinderOptions() *StrategyFinderOptions {
-	return &StrategyFinderOptions{testTimeout: 5 * time.Second}
+// NewFinderOptions creates options with a five-second test timeout.
+func NewFinderOptions() *FinderOptions {
+	return &FinderOptions{testTimeout: 5 * time.Second}
 }
 
 // SetConfigURLRegistry shares registry with the finders created by New. A nil
@@ -62,26 +62,26 @@ func NewStrategyFinderOptions() *StrategyFinderOptions {
 // registrations before New. On its first successful call, New wraps the default
 // stream parser to read a TLS-specific base from the construction context.
 // The original parser continues to serve DNS searches and fallbacks.
-func (o *StrategyFinderOptions) SetConfigURLRegistry(registry configurl.MutableRegistry) *StrategyFinderOptions {
+func (o *FinderOptions) SetConfigURLRegistry(registry configurl.MutableRegistry) *FinderOptions {
 	o.configURLRegistry = registry
 	o.registryPrepared = false
 	return o
 }
 
 // SetTestTimeout sets the positive timeout for each connectivity test.
-func (o *StrategyFinderOptions) SetTestTimeout(timeout time.Duration) *StrategyFinderOptions {
+func (o *FinderOptions) SetTestTimeout(timeout time.Duration) *FinderOptions {
 	o.testTimeout = timeout
 	return o
 }
 
 // SetLogWriter sets the optional destination for strategy selection logs.
-func (o *StrategyFinderOptions) SetLogWriter(writer io.Writer) *StrategyFinderOptions {
+func (o *FinderOptions) SetLogWriter(writer io.Writer) *FinderOptions {
 	o.logWriter = writer
 	return o
 }
 
 // SetCache sets the optional cache of successful strategies.
-func (o *StrategyFinderOptions) SetCache(cache StrategyResultCache) *StrategyFinderOptions {
+func (o *FinderOptions) SetCache(cache StrategyResultCache) *FinderOptions {
 	o.cache = cache
 	return o
 }
@@ -89,7 +89,7 @@ func (o *StrategyFinderOptions) SetCache(cache StrategyResultCache) *StrategyFin
 // RegisterFallbackParser registers or replaces a parser for a YAML fallback type.
 // A parser can capture the registry passed to SetConfigURLRegistry to construct
 // nested config URLs using the same component registrations and base instances.
-func (o *StrategyFinderOptions) RegisterFallbackParser(name string, parser FallbackParser) *StrategyFinderOptions {
+func (o *FinderOptions) RegisterFallbackParser(name string, parser FallbackParser) *FinderOptions {
 	if o.fallbackParsers == nil {
 		o.fallbackParsers = make(map[string]FallbackParser)
 	}
@@ -99,8 +99,8 @@ func (o *StrategyFinderOptions) RegisterFallbackParser(name string, parser Fallb
 
 // New validates the options and creates a finder without performing network I/O.
 // It snapshots the options and fallback registrations, sharing the registry, cache,
-// and log writer by reference. The deprecated dialer fields are left nil.
-func (o *StrategyFinderOptions) New() (*StrategyFinder, error) {
+// and log writer by reference. The returned finder is ready to search.
+func (o *FinderOptions) New() (Finder, error) {
 	if o.testTimeout <= 0 {
 		return nil, errors.New("test timeout must be positive")
 	}
@@ -124,11 +124,11 @@ func (o *StrategyFinderOptions) New() (*StrategyFinder, error) {
 		}
 		o.registryMu.Unlock()
 	}
-	return &StrategyFinder{
-		TestTimeout:       o.testTimeout,
-		LogWriter:         o.logWriter,
-		Cache:             o.cache,
-		configURLRegistry: registry,
-		fallbackParsers:   maps.Clone(o.fallbackParsers),
+	return &finder{
+		testTimeout:     o.testTimeout,
+		logWriter:       o.logWriter,
+		cache:           o.cache,
+		registry:        registry,
+		fallbackParsers: maps.Clone(o.fallbackParsers),
 	}, nil
 }

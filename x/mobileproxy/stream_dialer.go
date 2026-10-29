@@ -50,7 +50,7 @@ type SmartDialerOptions struct {
 	testDomains   []string
 	config        []byte
 	registry      configurl.MutableRegistry
-	finderOptions *smart.StrategyFinderOptions
+	finderOptions *smart.FinderOptions
 }
 
 // NewSmartDialerOptions initializes the required options for creating a "Smart Dialer".
@@ -64,7 +64,7 @@ func NewSmartDialerOptions(testDomains *StringList, config string) *SmartDialerO
 		testDomains:   testDomains.list,
 		config:        []byte(config),
 		registry:      registry,
-		finderOptions: smart.NewStrategyFinderOptions().SetConfigURLRegistry(registry),
+		finderOptions: smart.NewFinderOptions().SetConfigURLRegistry(registry),
 	}
 }
 

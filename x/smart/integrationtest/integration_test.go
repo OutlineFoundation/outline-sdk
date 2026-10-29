@@ -33,7 +33,7 @@ import (
 	"golang.getoutline.org/sdk/x/smart"
 )
 
-// mockStreamDialer intercepts stream connections made by StrategyFinder.
+// mockStreamDialer intercepts stream connections made by Finder.
 // It redirects connection attempts for specific badssl.com endpoints to local mock servers,
 // and fails all other connections to simulate a completely broken network environment.
 type mockStreamDialer struct {
@@ -142,13 +142,11 @@ fallback:
 		return packetDialer, nil
 	}
 	configurl.RegisterBase(registry, newPacketDialer)
-	finder, err := smart.NewStrategyFinderOptions().
+	opts := smart.NewFinderOptions().
 		SetConfigURLRegistry(registry).
 		SetLogWriter(logger.Writer()).
-		SetTestTimeout(5 * time.Second).
-		New()
-	require.NoError(t, err)
-	finder.RegisterFallbackParser("error", func(ctx context.Context, config smart.YAMLNode) (transport.StreamDialer, string, error) {
+		SetTestTimeout(5 * time.Second)
+	opts.RegisterFallbackParser("error", func(ctx context.Context, config smart.YAMLNode) (transport.StreamDialer, string, error) {
 		m, ok := config.(map[string]any)
 		if !ok {
 			return nil, "", fmt.Errorf("invalid config of type %T", config)
@@ -156,6 +154,8 @@ fallback:
 		errStr, _ := m["error"].(string)
 		return nil, "signature_placeholder", errors.New(errStr)
 	})
+	finder, err := opts.New()
+	require.NoError(t, err)
 
 	_, err = finder.NewDialer(context.Background(), testDomains, configBytes)
 

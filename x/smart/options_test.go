@@ -38,13 +38,13 @@ func (d namedDialer) DialStream(ctx context.Context, addr string) (transport.Str
 	return nil, fmt.Errorf("%s@%s", d, addr)
 }
 
-func TestStrategyFinderOptions(t *testing.T) {
+func TestFinderOptions(t *testing.T) {
 	registry := configurl.NewDefaultRegistry()
 	var logs bytes.Buffer
 	parser := func(context.Context, YAMLNode) (transport.StreamDialer, string, error) {
 		return namedDialer("custom"), "custom", nil
 	}
-	opts := NewStrategyFinderOptions()
+	opts := NewFinderOptions()
 	require.Same(t, opts, opts.SetTestTimeout(0).SetLogWriter(&logs).SetCache(nil).
 		SetConfigURLRegistry(registry).RegisterFallbackParser("custom", nil))
 	_, err := opts.New()
@@ -52,178 +52,32 @@ func TestStrategyFinderOptions(t *testing.T) {
 	opts.SetTestTimeout(time.Second)
 	_, err = opts.New()
 	require.ErrorContains(t, err, `fallback parser "custom" must not be nil`)
-	finder, err := opts.RegisterFallbackParser("custom", parser).New()
+	result, err := opts.RegisterFallbackParser("custom", parser).New()
 	require.NoError(t, err)
-	require.Same(t, registry, finder.configURLRegistry)
-	require.Same(t, &logs, finder.LogWriter)
-	require.Equal(t, time.Second, finder.TestTimeout)
-	require.Nil(t, finder.StreamDialer)
-	require.Nil(t, finder.PacketDialer)
+	f := result.(*finder)
+	require.Same(t, registry, f.registry)
+	require.Same(t, &logs, f.logWriter)
+	require.Equal(t, time.Second, f.testTimeout)
 
 	// Scalar options and the parser map are snapshots, not live builder state.
 	opts.SetTestTimeout(2*time.Second).SetLogWriter(nil).RegisterFallbackParser("custom", nil)
-	dialer, _, err := finder.makeDialerFromConfig(context.Background(), registry, map[string]any{"custom": ""})
+	dialer, _, err := f.makeDialerFromConfig(context.Background(), registry, map[string]any{"custom": ""})
 	require.NoError(t, err)
 	require.Equal(t, namedDialer("custom"), dialer)
-	require.Equal(t, time.Second, finder.TestTimeout)
-	require.Same(t, &logs, finder.LogWriter)
+	require.Equal(t, time.Second, f.testTimeout)
+	require.Same(t, &logs, f.logWriter)
 }
 
-func TestStrategyFinderOptionsDefaultRegistries(t *testing.T) {
-	opts := NewStrategyFinderOptions().SetConfigURLRegistry(nil)
+func TestFinderOptionsDefaultRegistries(t *testing.T) {
+	opts := NewFinderOptions().SetConfigURLRegistry(nil)
 	first, err := opts.New()
 	require.NoError(t, err)
 	second, err := opts.New()
 	require.NoError(t, err)
-	require.NotSame(t, first.configURLRegistry, second.configURLRegistry)
-	require.Equal(t, 5*time.Second, first.TestTimeout)
-	_, err = configurl.New[transport.StreamDialer](context.Background(), first.configURLRegistry, "tlsfrag:1")
+	require.NotSame(t, first.(*finder).registry, second.(*finder).registry)
+	require.Equal(t, 5*time.Second, first.(*finder).testTimeout)
+	_, err = configurl.New[transport.StreamDialer](context.Background(), first.(*finder).registry, "tlsfrag:1")
 	require.NoError(t, err)
-}
-
-func TestLegacyFinderRegistry(t *testing.T) {
-	for _, mode := range []string{"none", "stream", "packet", "both"} {
-		t.Run(mode, func(t *testing.T) {
-			finder := &StrategyFinder{TestTimeout: time.Second}
-			if mode == "stream" || mode == "both" {
-				finder.StreamDialer = namedDialer("legacy")
-			}
-			pd := &transport.UDPDialer{}
-			if mode == "packet" || mode == "both" {
-				finder.PacketDialer = pd
-			}
-			streamDialer, packetDialer := finder.StreamDialer, finder.PacketDialer
-			// Invalid YAML still initializes the registry. A later call can retry.
-			_, err := finder.NewDialer(context.Background(), nil, []byte("["))
-			require.Error(t, err)
-			registry := finder.configURLRegistry
-			require.NotNil(t, registry)
-			require.Equal(t, streamDialer, finder.StreamDialer)
-			require.Equal(t, packetDialer, finder.PacketDialer)
-			packetBase, err := configurl.NewFromConfig[transport.PacketDialer](context.Background(), registry, nil)
-			require.NoError(t, err)
-			listenerBase, err := configurl.NewFromConfig[transport.PacketListener](context.Background(), registry, nil)
-			require.NoError(t, err)
-			if mode == "packet" || mode == "both" {
-				require.Same(t, pd, packetBase)
-			} else {
-				require.IsType(t, &transport.UDPDialer{}, packetBase)
-			}
-			require.IsType(t, &transport.UDPListener{}, listenerBase)
-			for range 2 {
-				dialer, err := finder.NewDialer(context.Background(), nil, []byte(`fallback: [""]`))
-				require.NoError(t, err)
-				require.Same(t, registry, finder.configURLRegistry)
-				if mode == "stream" || mode == "both" {
-					// Legacy bases now apply to fallback configs as well as DNS/TLS.
-					require.Equal(t, namedDialer("legacy"), dialer)
-				} else {
-					require.IsType(t, &transport.TCPDialer{}, dialer)
-				}
-			}
-		})
-	}
-}
-
-func TestLegacyFinderDialerUpdates(t *testing.T) {
-	ctx := context.Background()
-	finder := &StrategyFinder{}
-	fallbackConfig := []byte(`fallback: [""]`)
-	defaultSD, err := finder.NewDialer(ctx, nil, fallbackConfig)
-	require.NoError(t, err)
-	registry := finder.configURLRegistry
-	defaultPD, err := configurl.NewFromConfig[transport.PacketDialer](ctx, registry, nil)
-	require.NoError(t, err)
-	listener, err := configurl.NewFromConfig[transport.PacketListener](ctx, registry, nil)
-	require.NoError(t, err)
-
-	type result struct {
-		name   string
-		dialer transport.StreamDialer
-		packet *countingDNSDialer
-	}
-	var results []result
-	for _, name := range []string{"first", "second"} {
-		pd := &countingDNSDialer{}
-		finder.StreamDialer = namedDialer(name)
-		finder.PacketDialer = pd
-		fallback, err := finder.NewDialer(ctx, nil, fallbackConfig)
-		require.NoError(t, err)
-		require.Equal(t, namedDialer(name), fallback)
-
-		// Exercise both fields through DNS selection and TLS construction.
-		dialer, err := finder.NewDialer(ctx, nil, []byte(`
-dns: [{udp: {address: resolver.invalid}}]
-tls: ["tlsfrag:1"]
-`))
-		require.NoError(t, err)
-		_, err = dialer.DialStream(ctx, "target.invalid:443")
-		require.EqualError(t, err, name+"@192.0.2.42:443")
-		require.EqualValues(t, 2, pd.queries.Load(), "DNS uses the current packet dialer")
-		require.Same(t, registry, finder.configURLRegistry, "field updates reuse the registry")
-		results = append(results, result{name, dialer, pd})
-	}
-
-	// Clearing the fields restores the same defaults without replacing the registry.
-	finder.StreamDialer = nil
-	finder.PacketDialer = nil
-	sd, err := finder.NewDialer(ctx, nil, fallbackConfig)
-	require.NoError(t, err)
-	require.Same(t, defaultSD, sd)
-	pd, err := configurl.NewFromConfig[transport.PacketDialer](ctx, registry, nil)
-	require.NoError(t, err)
-	require.Same(t, defaultPD, pd)
-	pl, err := configurl.NewFromConfig[transport.PacketListener](ctx, registry, nil)
-	require.NoError(t, err)
-	require.Same(t, listener, pl, "legacy fields do not affect the packet listener")
-	require.Same(t, registry, finder.configURLRegistry)
-
-	// Previously returned dialers retain both bases, even for an uncached name.
-	for _, result := range results {
-		_, err := result.dialer.DialStream(ctx, "uncached.invalid:443")
-		require.EqualError(t, err, result.name+"@192.0.2.42:443")
-		require.EqualValues(t, 4, result.packet.queries.Load())
-	}
-}
-
-func TestFinderRejectsMixedRegistryAndLegacyDialers(t *testing.T) {
-	for _, field := range []string{"stream", "packet"} {
-		t.Run(field, func(t *testing.T) {
-			var logs bytes.Buffer
-			cache := &memoryStrategyCache{}
-			finder, err := NewStrategyFinderOptions().SetLogWriter(&logs).SetCache(cache).New()
-			require.NoError(t, err)
-			if field == "stream" {
-				finder.StreamDialer = namedDialer("legacy")
-			} else {
-				finder.PacketDialer = &transport.UDPDialer{}
-			}
-			_, err = finder.NewDialer(context.Background(), nil, []byte("["))
-			require.ErrorContains(t, err, "mutually exclusive")
-			require.Empty(t, logs.String())
-			require.Zero(t, cache.gets.Load())
-			require.Zero(t, cache.puts.Load())
-		})
-	}
-}
-
-func TestLegacyFinderConcurrentFirstUse(t *testing.T) {
-	finder := &StrategyFinder{}
-	var wg sync.WaitGroup
-	for _, name := range []string{"first", "second"} {
-		finder.StreamDialer = namedDialer(name)
-		for range 16 {
-			wg.Add(1)
-			go func() {
-				defer wg.Done()
-				dialer, err := finder.NewDialer(context.Background(), nil, []byte(`fallback: [""]`))
-				if err != nil || dialer != namedDialer(name) {
-					t.Errorf("NewDialer = %v, %v", dialer, err)
-				}
-			}()
-		}
-		wg.Wait()
-	}
 }
 
 type memoryStrategyCache struct {
@@ -271,7 +125,7 @@ func TestFallbackRegistryAndCache(t *testing.T) {
 			}
 			cache := &memoryStrategyCache{}
 			var logs bytes.Buffer
-			finder, err := NewStrategyFinderOptions().SetConfigURLRegistry(registry).
+			finder, err := NewFinderOptions().SetConfigURLRegistry(registry).
 				RegisterFallbackParser("nested", parser).SetCache(cache).SetLogWriter(&logs).New()
 			require.NoError(t, err)
 			for range 2 {
@@ -292,7 +146,7 @@ func TestDNSMissingRegistryBases(t *testing.T) {
 	registry := configurl.NewDefaultRegistry()
 	configurl.RegisterBase[transport.StreamDialer](registry, nil)
 	configurl.RegisterBase[transport.PacketDialer](registry, nil)
-	finder, err := NewStrategyFinderOptions().SetConfigURLRegistry(registry).New()
+	finder, err := NewFinderOptions().SetConfigURLRegistry(registry).New()
 	require.NoError(t, err)
 	for _, config := range []string{
 		`dns: [{udp: {address: resolver.invalid}}]`,
