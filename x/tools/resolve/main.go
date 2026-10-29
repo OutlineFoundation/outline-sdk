@@ -48,7 +48,7 @@ func rcodeToString(rcode dnsmessage.RCode) string {
 
 func main() {
 	verboseFlag := flag.Bool("v", false, "Enable debug output")
-	typeFlag := flag.String("type", "A", "The type of the query (A, AAAA, CNAME, NS or TXT).")
+	typeFlag := flag.String("type", "A", "The type of the query (A, AAAA, CNAME, HTTPS, NS, SOA, SVCB or TXT).")
 	resolverFlag := flag.String("resolver", "", "The address of the recursive DNS resolver to use in host:port format. If the port is missing, it's assumed to be 53")
 	transportFlag := flag.String("transport", "", "The transport for the connection to the recursive DNS resolver")
 	tcpFlag := flag.Bool("tcp", false, "Force TCP when querying the DNS resolver")
@@ -82,22 +82,9 @@ func main() {
 		resolver = dns.NewUDPResolver(packetDialer, resolverAddr)
 	}
 
-	var qtype dnsmessage.Type
-	switch strings.ToUpper(*typeFlag) {
-	case "A":
-		qtype = dnsmessage.TypeA
-	case "AAAA":
-		qtype = dnsmessage.TypeAAAA
-	case "CNAME":
-		qtype = dnsmessage.TypeCNAME
-	case "NS":
-		qtype = dnsmessage.TypeNS
-	case "SOA":
-		qtype = dnsmessage.TypeSOA
-	case "TXT":
-		qtype = dnsmessage.TypeTXT
-	default:
-		log.Fatalf("Unsupported query type %v", *typeFlag)
+	qtype, err := parseQueryType(*typeFlag)
+	if err != nil {
+		log.Fatal(err)
 	}
 
 	q, err := dns.NewQuestion(domain, qtype)
@@ -117,26 +104,62 @@ func main() {
 		log.Fatalf("Got response code %v", rcodeToString(response.RCode))
 	}
 	debugLog.Println(response.GoString())
-	for _, answer := range response.Answers {
+	if err := printAnswers(os.Stdout, response.Answers, qtype); err != nil {
+		log.Fatalf("Could not print answers: %v", err)
+	}
+}
+
+func parseQueryType(queryType string) (dnsmessage.Type, error) {
+	switch strings.ToUpper(queryType) {
+	case "A":
+		return dnsmessage.TypeA, nil
+	case "AAAA":
+		return dnsmessage.TypeAAAA, nil
+	case "CNAME":
+		return dnsmessage.TypeCNAME, nil
+	case "HTTPS":
+		return typeHTTPS, nil
+	case "NS":
+		return dnsmessage.TypeNS, nil
+	case "SOA":
+		return dnsmessage.TypeSOA, nil
+	case "SVCB":
+		return typeSVCB, nil
+	case "TXT":
+		return dnsmessage.TypeTXT, nil
+	default:
+		return 0, fmt.Errorf("unsupported query type %v", queryType)
+	}
+}
+
+func printAnswers(out io.Writer, answers []dnsmessage.Resource, qtype dnsmessage.Type) error {
+	for _, answer := range answers {
 		if answer.Header.Type != qtype {
 			continue
 		}
 		switch answer.Header.Type {
 		case dnsmessage.TypeA:
-			fmt.Println(net.IP(answer.Body.(*dnsmessage.AResource).A[:]))
+			fmt.Fprintln(out, net.IP(answer.Body.(*dnsmessage.AResource).A[:]))
 		case dnsmessage.TypeAAAA:
-			fmt.Println(net.IP(answer.Body.(*dnsmessage.AAAAResource).AAAA[:]))
+			fmt.Fprintln(out, net.IP(answer.Body.(*dnsmessage.AAAAResource).AAAA[:]))
 		case dnsmessage.TypeCNAME:
-			fmt.Println(answer.Body.(*dnsmessage.CNAMEResource).CNAME.String())
+			fmt.Fprintln(out, answer.Body.(*dnsmessage.CNAMEResource).CNAME.String())
 		case dnsmessage.TypeNS:
-			fmt.Println(answer.Body.(*dnsmessage.NSResource).NS.String())
+			fmt.Fprintln(out, answer.Body.(*dnsmessage.NSResource).NS.String())
 		case dnsmessage.TypeSOA:
 			soa := answer.Body.(*dnsmessage.SOAResource)
-			fmt.Printf("ns: %v email: %v minTTL: %v\n", soa.NS, soa.MBox, soa.MinTTL)
+			fmt.Fprintf(out, "ns: %v email: %v minTTL: %v\n", soa.NS, soa.MBox, soa.MinTTL)
 		case dnsmessage.TypeTXT:
-			fmt.Println(strings.Join(answer.Body.(*dnsmessage.TXTResource).TXT, ", "))
+			fmt.Fprintln(out, strings.Join(answer.Body.(*dnsmessage.TXTResource).TXT, ", "))
+		case typeHTTPS, typeSVCB:
+			text, err := formatSVCB(answer)
+			if err != nil {
+				return fmt.Errorf("record for %s: %w", answer.Header.Name, err)
+			}
+			fmt.Fprintln(out, text)
 		default:
-			fmt.Println(answer.Body.GoString())
+			fmt.Fprintln(out, answer.Body.GoString())
 		}
 	}
+	return nil
 }

@@ -13,7 +13,7 @@ Usage: resolve [flags...] <domain>
   -transport string
         The transport for the connection to the recursive DNS resolver
   -type string
-        The type of the query (A, AAAA, CNAME, NS or TXT). (default "A")
+        The type of the query (A, AAAA, CNAME, HTTPS, NS, SOA, SVCB or TXT). (default "A")
   -v    Enable debug output
 ```
 
@@ -38,6 +38,36 @@ Use `-resolver` to specify which resolver to use. In this case we use Google's P
 $ go run golang.getoutline.org/sdk/x/tools/resolve -resolver 8.8.8.8 www.rferl.org
 104.102.138.83
 ```
+
+Use `-type HTTPS` to query HTTPS service bindings:
+
+```sh
+go run golang.getoutline.org/sdk/x/tools/resolve -resolver 1.1.1.1 -type HTTPS cloudflare.com
+```
+
+Use `-type SVCB` for other service bindings, such as DNS resolver discovery:
+
+```sh
+go run golang.getoutline.org/sdk/x/tools/resolve -resolver 1.1.1.1 -type SVCB _dns.resolver.arpa
+```
+
+Each answer is printed as `priority target parameters` in DNS presentation format.
+For example, a service could return:
+
+```text
+1 . alpn="h2,h3" port="443" ipv4hint="192.0.2.1"
+```
+
+The output includes advertised parameters such as ALPN protocols, address hints,
+and the base64 `ech` configuration, as well as unknown parameters in `keyNNNN`
+form. ECH values can be copied into the fetch tool's `-ech-config` flag. Records
+are printed individually; the tool does not follow service-binding aliases or
+select an endpoint. Use `-v` to inspect the full DNS response, including TTLs and
+other record types.
+
+HTTPS is the DNS record type, not the protocol used to query the resolver.
+These lookups use the same `-resolver`, `-transport`, and `-tcp` options as other
+query types. Use `-tcp` when a UDP response is truncated.
 
 It's possible to specify a proxy to connect to the resolver using the `-transport` flag. This is very helpful for experimentation. In the example below, we resolve via a remote proxy in Russia. When using a remote server, you must also specify the resolver to use. Note in the example output how the domain is blocked with a CNAME to `fz139.ttk.ru`
 
