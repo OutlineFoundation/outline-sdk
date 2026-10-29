@@ -17,6 +17,7 @@ require (
 	github.com/goccy/go-yaml v1.17.1
 	github.com/gorilla/websocket v1.5.3
 	github.com/lmittmann/tint v1.0.7
+	github.com/miekg/dns v1.1.56
 	github.com/quic-go/quic-go v0.48.1
 	github.com/songgao/water v0.0.0-20200317203138-2b4b6d7c09d8
 	github.com/stretchr/testify v1.9.0
@@ -78,7 +79,6 @@ require (
 	github.com/marusama/semaphore v0.0.0-20171214154724-565ffd8e868a // indirect
 	github.com/mdlayher/netlink v1.7.2 // indirect
 	github.com/mdlayher/socket v0.5.0 // indirect
-	github.com/miekg/dns v1.1.56 // indirect
 	github.com/mroth/weightedrand v1.0.0 // indirect
 	github.com/onsi/ginkgo/v2 v2.12.0 // indirect
 	github.com/pelletier/go-toml v1.9.5 // indirect
