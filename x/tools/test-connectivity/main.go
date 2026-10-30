@@ -285,7 +285,7 @@ func main() {
 				return newTCPTraceDialer(onDNS, onDial).DialStream(ctx, addr)
 			}
 			baseSD := transport.FuncStreamDialer(dialStream)
-			newStreamBase := func(context.Context, *configurl.Config) (transport.StreamDialer, error) {
+			newStreamBase := func(context.Context, configurl.Registry, *configurl.Config) (transport.StreamDialer, error) {
 				return baseSD, nil
 			}
 			configurl.RegisterBase(registry, newStreamBase)
@@ -293,7 +293,7 @@ func main() {
 				return newUDPTraceDialer(onDNS).DialPacket(ctx, addr)
 			}
 			basePD := transport.FuncPacketDialer(dialPacket)
-			newPacketBase := func(context.Context, *configurl.Config) (transport.PacketDialer, error) {
+			newPacketBase := func(context.Context, configurl.Registry, *configurl.Config) (transport.PacketDialer, error) {
 				return basePD, nil
 			}
 			configurl.RegisterBase(registry, newPacketBase)

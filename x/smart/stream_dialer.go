@@ -350,7 +350,7 @@ func (f *StrategyFinder) findTLS(
 		return nil, "", errors.New("config for TLS is empty. Please specify at least one transport")
 	}
 	var configRegistry = configurl.NewDefaultRegistry()
-	newBase := func(context.Context, *configurl.Config) (transport.StreamDialer, error) {
+	newBase := func(context.Context, configurl.Registry, *configurl.Config) (transport.StreamDialer, error) {
 		return baseDialer, nil
 	}
 	configurl.RegisterBase(configRegistry, newBase)

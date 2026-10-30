@@ -15,6 +15,7 @@
 package configurl
 
 import (
+	"context"
 	"reflect"
 
 	"golang.getoutline.org/sdk/transport"
@@ -30,11 +31,11 @@ type providerContainerRegistry struct{ *ProviderContainer }
 func (r providerContainerRegistry) Lookup(resultType reflect.Type, name string) (any, bool) {
 	switch resultType {
 	case reflect.TypeFor[transport.StreamDialer]():
-		return lookupProviderBuildFunc(&r.StreamDialers, name)
+		return lookupProviderConstructor(&r.StreamDialers, name)
 	case reflect.TypeFor[transport.PacketDialer]():
-		return lookupProviderBuildFunc(&r.PacketDialers, name)
+		return lookupProviderConstructor(&r.PacketDialers, name)
 	case reflect.TypeFor[transport.PacketListener]():
-		return lookupProviderBuildFunc(&r.PacketListeners, name)
+		return lookupProviderConstructor(&r.PacketListeners, name)
 	default:
 		return nil, false
 	}
@@ -42,31 +43,50 @@ func (r providerContainerRegistry) Lookup(resultType reflect.Type, name string) 
 
 // Register implements [MutableRegistry].
 func (r providerContainerRegistry) Register(resultType reflect.Type, name string, parser any) {
-	validateBuildFunc(resultType, parser)
+	validateConstructor(resultType, parser)
 	switch resultType {
 	case reflect.TypeFor[transport.StreamDialer]():
-		registerProviderBuildFunc(&r.StreamDialers, name, parser)
+		registerProviderConstructor(r, &r.StreamDialers, name, parser)
 	case reflect.TypeFor[transport.PacketDialer]():
-		registerProviderBuildFunc(&r.PacketDialers, name, parser)
+		registerProviderConstructor(r, &r.PacketDialers, name, parser)
 	case reflect.TypeFor[transport.PacketListener]():
-		registerProviderBuildFunc(&r.PacketListeners, name, parser)
+		registerProviderConstructor(r, &r.PacketListeners, name, parser)
 	default:
 		panic("unsupported built-in configurl result type: " + resultType.String())
 	}
 }
 
-func lookupProviderBuildFunc[T comparable](provider *ExtensibleProvider[T], name string) (any, bool) {
+// lookupProviderConstructor adapts the released two-argument builder signature.
+func lookupProviderConstructor[T comparable](provider *ExtensibleProvider[T], name string) (any, bool) {
+	var builder BuildFunc[T]
 	if name == "" {
-		return BuildFunc[T](provider.NewInstance), true
+		builder = provider.NewInstance
+	} else {
+		var ok bool
+		builder, ok = provider.builders[name]
+		if !ok {
+			return nil, false
+		}
 	}
-	parser, ok := provider.builders[name]
-	return parser, ok
+	if builder == nil {
+		return Constructor[T](nil), true
+	}
+	newInstance := func(ctx context.Context, _ Registry, config *Config) (T, error) {
+		return builder(ctx, config)
+	}
+	return Constructor[T](newInstance), true
 }
 
-func registerProviderBuildFunc[T comparable](provider *ExtensibleProvider[T], name string, parser any) {
+// registerProviderConstructor binds built-in dependencies to the legacy providers.
+func registerProviderConstructor[T comparable](registry Registry, provider *ExtensibleProvider[T], name string, parser any) {
 	var newInstance BuildFunc[T]
 	if parser != nil {
-		newInstance = parser.(BuildFunc[T])
+		constructor := parser.(Constructor[T])
+		if constructor != nil {
+			newInstance = func(ctx context.Context, config *Config) (T, error) {
+				return constructor(ctx, registry, config)
+			}
+		}
 	}
 	provider.RegisterType(name, newInstance)
 }
