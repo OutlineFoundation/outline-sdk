@@ -230,9 +230,16 @@ func (f *finder) dnsConfigToResolver(ctx context.Context, dnsConfig []dnsEntryCo
 		id := string(idBytes)
 		resolver, isSecure, err := f.newDNSResolverFromEntry(ctx, entry)
 		if err != nil {
+			if errors.Is(err, errors.ErrUnsupported) {
+				logCtx(ctx, "Skipping unsupported DNS entry %d: %v\n", ei, err)
+				continue
+			}
 			return nil, fmt.Errorf("failed to process entry %v: %w", ei, err)
 		}
 		rts = append(rts, &smartResolver{Resolver: resolver, ID: id, Secure: isSecure, Config: entry})
+	}
+	if len(rts) == 0 {
+		return nil, fmt.Errorf("%.0wno supported DNS config entry", errors.ErrUnsupported)
 	}
 	return rts, nil
 }

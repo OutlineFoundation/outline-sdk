@@ -153,9 +153,79 @@ func TestDNSMissingRegistryBases(t *testing.T) {
 		`dns: [{tcp: {address: resolver.invalid}}]`,
 		`dns: [{tls: {name: resolver.invalid}}]`,
 		`dns: [{https: {name: resolver.invalid}}]`,
+		`dns: [{udp: {address: resolver.invalid}}, {tcp: {address: resolver.invalid}}]`,
 		`dns: [{system: {}}]`,
 	} {
 		_, err := finder.NewDialer(context.Background(), nil, []byte(config))
-		require.Error(t, err, config)
+		require.ErrorIs(t, err, errors.ErrUnsupported, config)
+	}
+}
+
+func TestDNSSkipsUnsupportedRegistryBases(t *testing.T) {
+	for _, config := range []string{
+		`dns: [{system: {}}, {udp: {address: resolver.invalid}}]`,
+		`dns: [{udp: {address: resolver.invalid}}, {system: {}}]`,
+	} {
+		t.Run(config, func(t *testing.T) {
+			registry := configurl.NewDefaultRegistry()
+			configurl.RegisterBase[transport.PacketDialer](registry, nil)
+			var logs bytes.Buffer
+			finder, err := NewFinderOptions().SetConfigURLRegistry(registry).SetLogWriter(&logs).New()
+			require.NoError(t, err)
+
+			// No test domains are needed to verify candidate selection without network access.
+			dialer, err := finder.NewDialer(context.Background(), nil, []byte(config))
+			require.NoError(t, err)
+			base, err := configurl.NewFromConfig[transport.StreamDialer](context.Background(), registry, nil)
+			require.NoError(t, err)
+			require.Same(t, base, dialer, "the system resolver should retain the stream base")
+			require.Contains(t, logs.String(), "Skipping unsupported DNS entry")
+			require.Contains(t, logs.String(), "DNS requires a packet base instance")
+		})
+	}
+}
+
+func TestDNSPreservesEntryErrors(t *testing.T) {
+	for _, tt := range []struct {
+		name      string
+		config    string
+		baseError error
+		message   string
+	}{
+		{
+			name:    "invalid config",
+			config:  `dns: [{system: {}}, {udp: {}}]`,
+			message: "udp entry has empty server address",
+		},
+		{
+			name:      "base construction failure",
+			config:    `dns: [{system: {}}, {udp: {address: resolver.invalid}}]`,
+			baseError: errors.New("cannot initialize packet dialer"),
+			message:   "cannot initialize packet dialer",
+		},
+		{
+			name:      "base construction canceled",
+			config:    `dns: [{system: {}}, {udp: {address: resolver.invalid}}]`,
+			baseError: context.Canceled,
+			message:   context.Canceled.Error(),
+		},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			registry := configurl.NewDefaultRegistry()
+			if tt.baseError != nil {
+				configurl.RegisterBase(registry, func(context.Context, configurl.Registry, *configurl.Config) (transport.PacketDialer, error) {
+					return nil, tt.baseError
+				})
+			}
+			finder, err := NewFinderOptions().SetConfigURLRegistry(registry).New()
+			require.NoError(t, err)
+			dialer, err := finder.NewDialer(context.Background(), nil, []byte(tt.config))
+			require.ErrorContains(t, err, tt.message)
+			require.NotErrorIs(t, err, errors.ErrUnsupported)
+			if tt.baseError != nil {
+				require.ErrorIs(t, err, tt.baseError)
+			}
+			require.Nil(t, dialer)
+		})
 	}
 }
