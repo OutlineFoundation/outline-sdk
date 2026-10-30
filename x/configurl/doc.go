@@ -210,10 +210,11 @@ that inspect the initial packets:
 
 	disorder:0|split:123
 
-Use DNS-over-HTTPS for destination resolution, then split outgoing streams.
-Specifying the resolver's IP address avoids needing DNS to locate the resolver:
+Evading DNS and SNI blocking - You can use Cloudflare's DNS-over-HTTPS to protect against DNS disruption.
+The DoH resolver cloudflare-dns.com is accessible from any cloudflare.net IP, so you can specify the address to avoid blocking
+of the resolver itself. This can be combined with a TCP split or TLS Record Fragmentation to bypass SNI-based blocking:
 
-	doh:name=[RESOLVER_NAME]&address=[RESOLVER_IP]:443|split:2
+	doh:name=cloudflare-dns.com.&address=cloudflare.net.:443|split:2
 
 Tunnel SOCKS5 over TLS, sending decoy.example.com as SNI while validating the
 server certificate against HOST:
