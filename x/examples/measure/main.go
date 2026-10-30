@@ -30,10 +30,11 @@ import (
 	"sync/atomic"
 	"time"
 
-	"golang.getoutline.org/sdk/transport/tls"
-	"golang.getoutline.org/sdk/x/configurl"
 	"github.com/goccy/go-yaml"
 	"github.com/lmittmann/tint"
+	"golang.getoutline.org/sdk/transport"
+	"golang.getoutline.org/sdk/transport/tls"
+	"golang.getoutline.org/sdk/x/configurl"
 	"golang.org/x/term"
 )
 
@@ -82,7 +83,7 @@ type ISPInfo struct {
 	}
 }
 
-var transportToDialer = configurl.NewDefaultProviders()
+var configRegistry = configurl.NewDefaultRegistry()
 
 func makeErrorMsg(err error, domain string) string {
 	return strings.ReplaceAll(err.Error(), domain, "${DOMAIN}")
@@ -92,7 +93,7 @@ func newISP(ispProxy string) ISP {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	dialer, err := transportToDialer.NewStreamDialer(ctx, ispProxy)
+	dialer, err := configurl.New[transport.StreamDialer](ctx, configRegistry, ispProxy)
 	if err != nil {
 		slog.Error("Could not create ISP dialer", "error", err)
 		os.Exit(1)
@@ -200,16 +201,16 @@ func main() {
 			}
 			for attempt := 1; attempt <= numAttempts; attempt++ {
 				for _, strategy := range cfg.Strategies {
-					transport := isp.Transport
-					if transport != "" && strategy != "" {
-						transport += "|" + strategy
+					transportConfig := isp.Transport
+					if transportConfig != "" && strategy != "" {
+						transportConfig += "|" + strategy
 					}
 					var test func(context.Context, string, string) (string, string)
 					switch cfg.Proto {
 					case "":
 						fallthrough
 					case "tls":
-						dialer, err := transportToDialer.NewStreamDialer(ctx, transport)
+						dialer, err := configurl.New[transport.StreamDialer](ctx, configRegistry, transportConfig)
 						if err != nil {
 							slog.Error("Could not create dialer", "error", err)
 							os.Exit(1)
@@ -234,7 +235,7 @@ func main() {
 							return "", ""
 						}
 					case "quic":
-						_, err := transportToDialer.NewPacketListener(ctx, transport)
+						_, err := configurl.New[transport.PacketListener](ctx, configRegistry, transportConfig)
 						if err != nil {
 							slog.Error("Could not create dialer", "error", err)
 							os.Exit(1)

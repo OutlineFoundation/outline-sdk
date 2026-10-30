@@ -87,12 +87,12 @@ func main() {
 		log.Fatalf("Could not read config: %v", err)
 	}
 
-	providers := configurl.NewDefaultProviders()
-	packetDialer, err := providers.NewPacketDialer(context.Background(), *transportFlag)
+	registry := configurl.NewDefaultRegistry()
+	packetDialer, err := configurl.New[transport.PacketDialer](context.Background(), registry, *transportFlag)
 	if err != nil {
 		log.Fatalf("Could not create packet dialer: %v", err)
 	}
-	streamDialer, err := providers.NewStreamDialer(context.Background(), *transportFlag)
+	streamDialer, err := configurl.New[transport.StreamDialer](context.Background(), registry, *transportFlag)
 	if err != nil {
 		log.Fatalf("Could not create stream dialer: %v", err)
 	}

@@ -32,12 +32,12 @@ type StreamDialer struct {
 	transport.StreamDialer
 }
 
-var configRegistry = configurl.NewDefaultProviders()
+var configRegistry = configurl.NewDefaultRegistry()
 
 // NewStreamDialerFromConfig creates a [StreamDialer] based on the given config.
 // The config format is specified in https://pkg.go.dev/golang.getoutline.org/sdk/x/configurl#hdr-Config_Format.
 func NewStreamDialerFromConfig(transportConfig string) (*StreamDialer, error) {
-	dialer, err := configRegistry.NewStreamDialer(context.Background(), transportConfig)
+	dialer, err := configurl.New[transport.StreamDialer](context.Background(), configRegistry, transportConfig)
 	if err != nil {
 		return nil, err
 	}

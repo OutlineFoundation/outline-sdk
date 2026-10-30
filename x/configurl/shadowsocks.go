@@ -26,61 +26,55 @@ import (
 	"golang.getoutline.org/sdk/transport/shadowsocks"
 )
 
-func registerShadowsocksStreamDialer(r TypeRegistry[transport.StreamDialer], typeID string, newSD BuildFunc[transport.StreamDialer]) {
-	r.RegisterType(typeID, func(ctx context.Context, config *Config) (transport.StreamDialer, error) {
-		sd, err := newSD(ctx, config.BaseConfig)
-		if err != nil {
-			return nil, err
-		}
-		ssConfig, err := parseShadowsocksURL(config.URL)
-		if err != nil {
-			return nil, err
-		}
-		endpoint := &transport.StreamDialerEndpoint{Dialer: sd, Address: ssConfig.serverAddress}
-		dialer, err := shadowsocks.NewStreamDialer(endpoint, ssConfig.cryptoKey)
-		if err != nil {
-			return nil, err
-		}
-		if len(ssConfig.prefix) > 0 {
-			dialer.SaltGenerator = shadowsocks.NewPrefixSaltGenerator(ssConfig.prefix)
-		}
-		return dialer, nil
-	})
+func parseShadowsocksStreamDialer(ctx context.Context, registry Registry, config *Config) (transport.StreamDialer, error) {
+	sd, err := NewFromConfig[transport.StreamDialer](ctx, registry, config.BaseConfig)
+	if err != nil {
+		return nil, err
+	}
+	ssConfig, err := parseShadowsocksURL(config.URL)
+	if err != nil {
+		return nil, err
+	}
+	endpoint := &transport.StreamDialerEndpoint{Dialer: sd, Address: ssConfig.serverAddress}
+	dialer, err := shadowsocks.NewStreamDialer(endpoint, ssConfig.cryptoKey)
+	if err != nil {
+		return nil, err
+	}
+	if len(ssConfig.prefix) > 0 {
+		dialer.SaltGenerator = shadowsocks.NewPrefixSaltGenerator(ssConfig.prefix)
+	}
+	return dialer, nil
 }
 
-func registerShadowsocksPacketDialer(r TypeRegistry[transport.PacketDialer], typeID string, newPD BuildFunc[transport.PacketDialer]) {
-	r.RegisterType(typeID, func(ctx context.Context, config *Config) (transport.PacketDialer, error) {
-		pd, err := newPD(ctx, config.BaseConfig)
-		if err != nil {
-			return nil, err
-		}
-		ssConfig, err := parseShadowsocksURL(config.URL)
-		if err != nil {
-			return nil, err
-		}
-		endpoint := &transport.PacketDialerEndpoint{Dialer: pd, Address: ssConfig.serverAddress}
-		pl, err := shadowsocks.NewPacketListener(endpoint, ssConfig.cryptoKey)
-		if err != nil {
-			return nil, err
-		}
-		// TODO: support UDP prefix.
-		return transport.PacketListenerDialer{Listener: pl}, nil
-	})
+func parseShadowsocksPacketDialer(ctx context.Context, registry Registry, config *Config) (transport.PacketDialer, error) {
+	pd, err := NewFromConfig[transport.PacketDialer](ctx, registry, config.BaseConfig)
+	if err != nil {
+		return nil, err
+	}
+	ssConfig, err := parseShadowsocksURL(config.URL)
+	if err != nil {
+		return nil, err
+	}
+	endpoint := &transport.PacketDialerEndpoint{Dialer: pd, Address: ssConfig.serverAddress}
+	pl, err := shadowsocks.NewPacketListener(endpoint, ssConfig.cryptoKey)
+	if err != nil {
+		return nil, err
+	}
+	// TODO: support UDP prefix.
+	return transport.PacketListenerDialer{Listener: pl}, nil
 }
 
-func registerShadowsocksPacketListener(r TypeRegistry[transport.PacketListener], typeID string, newPD BuildFunc[transport.PacketDialer]) {
-	r.RegisterType(typeID, func(ctx context.Context, config *Config) (transport.PacketListener, error) {
-		pd, err := newPD(ctx, config.BaseConfig)
-		if err != nil {
-			return nil, err
-		}
-		ssConfig, err := parseShadowsocksURL(config.URL)
-		if err != nil {
-			return nil, err
-		}
-		endpoint := &transport.PacketDialerEndpoint{Dialer: pd, Address: ssConfig.serverAddress}
-		return shadowsocks.NewPacketListener(endpoint, ssConfig.cryptoKey)
-	})
+func parseShadowsocksPacketListener(ctx context.Context, registry Registry, config *Config) (transport.PacketListener, error) {
+	pd, err := NewFromConfig[transport.PacketDialer](ctx, registry, config.BaseConfig)
+	if err != nil {
+		return nil, err
+	}
+	ssConfig, err := parseShadowsocksURL(config.URL)
+	if err != nil {
+		return nil, err
+	}
+	endpoint := &transport.PacketDialerEndpoint{Dialer: pd, Address: ssConfig.serverAddress}
+	return shadowsocks.NewPacketListener(endpoint, ssConfig.cryptoKey)
 }
 
 type shadowsocksConfig struct {

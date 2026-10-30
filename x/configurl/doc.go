@@ -13,7 +13,7 @@
 // limitations under the License.
 
 /*
-Package configurl provides a flexible and extensible framework for creating network objects based on textual configurations.
+Package configurl provides a flexible and extensible framework for constructing a network of components from textual configurations.
 This enables dynamic, composable, and easily shared transport configurations, making it ideal for complex networking scenarios.
 
 This package is currently experimental and primarily serves as a demonstration of its capabilities and potential use cases.
@@ -29,29 +29,52 @@ Key Features:
 
 # Configuration Format
 
-The configuration string is a pipe-separated (|) sequence of transport definitions. The order of transports indicates nesting, where the output of the first transport is used as the input to the next.
+A configuration is a pipe-separated sequence of component definitions. A
+component can use the configuration on its left to construct its dependencies.
+For wrapping components, A|B|C means A wraps the default base, B wraps A, and C
+wraps B. The resulting component is C.
 
-Example: A|B|C
+For example, split:2|tlsfrag:1 builds these layers:
 
-In this example:
+	application → TLS fragmentation → stream splitting → TCP
 
- 1. Transport A is the base transport.
- 2. Transport B wraps transport A.
- 3. Transport C wraps transport B.
+Outgoing data passes through TLS fragmentation first, then stream splitting.
+The first component, split:2, uses the default base [transport.StreamDialer].
+An empty configuration selects the default base for the requested Go type.
+[NewRegistry] supplies a TCP StreamDialer, a UDP [transport.PacketDialer], and a
+UDP [transport.PacketListener]. [NewDefaultRegistry] adds the built-in component
+parsers listed in the reference sections below.
 
-An empty string ("") represents the default TCP/UDP dialer.
+Each component definition is a URL. Its scheme selects the component's parser;
+the remaining fields carry that component's options. There are two common forms:
 
-Each transport definition follows a URL-like format, where the scheme identifies the transport type, and the opaque part (after the scheme) contains options specific to the transport.
+  - Opaque URLs, such as split:2 or tls:sni=example.com, put options after the colon.
+  - URLs such as socks5://proxy.example:1080 use a host, optional user information,
+    and, where supported, query parameters after a question mark.
 
-The following sections list transport types are currently supported, along with their configuration options.
+A scheme with no options can omit the colon. Escape a literal pipe in an option
+as %7C so it is not treated as a component separator.
+
+Go callers choose the result type with [New]; the Usage section below shows how.
+The type matters: for example, socks5 can produce a StreamDialer,
+PacketDialer, or PacketListener, while tlsfrag produces only a StreamDialer.
+A parser can request dependencies of a different type: h3connect returns a
+StreamDialer but uses a PacketListener for its QUIC transport. Not every sequence
+is valid; each dependency needs a registration for both its scheme and its Go type.
+
+# Built-in components
+
+[NewDefaultRegistry] registers the following config URL schemes. To add them
+to another MutableRegistry without changing its bases, use [RegisterDefaultTypes].
+The sections below describe their options and supported transport types.
 
 # Proxy Protocols
 
-Shadowsocks proxy (compatible with Outline's access keys, package [golang.getoutline.org/sdk/transport/shadowsocks])
+Shadowsocks proxy (stream dialers, packet dialers, and packet listeners; compatible with Outline's access keys; package [golang.getoutline.org/sdk/transport/shadowsocks])
 
 	ss://[USERINFO]@[HOST]:[PORT]?prefix=[PREFIX]
 
-SOCKS5 proxy (works with both stream and packet dialers, package [golang.getoutline.org/sdk/transport/socks5])
+SOCKS5 proxy (stream dialers, packet dialers, and packet listeners; package [golang.getoutline.org/sdk/transport/socks5])
 
 	socks5://[USERINFO]@[HOST]:[PORT]
 
@@ -72,9 +95,10 @@ Proxy authentication is supported in two ways:
 
   - URL userinfo (user:password@host) generates a Proxy-Authorization: Basic header.
 
-  - For other schemes such as Bearer the auth parameter sets the Proxy-Authorization header value directly.
+  - For other schemes such as Bearer the auth parameter sets the full Proxy-Authorization header value, for example ?auth=Bearer%20TOKEN.
 
-The config formats are:
+The config formats are shown below. All query parameters are optional; the first
+parameter supplied must start with ?, and subsequent parameters with &.
 
 	httpconnect://[USER:PASS@][HOST]:[PORT][?sni=SNI][&certname=CERTNAME][&auth=TOKEN]
 	h2connect://[USER:PASS@][HOST]:[PORT][?sni=SNI][&certname=CERTNAME][&auth=TOKEN][&plain=true]
@@ -89,7 +113,7 @@ The certname parameter defines what name to validate against the server certific
 
 	tls:sni=[SNI]&certname=[CERT_NAME]
 
-WebSockets
+WebSockets (stream and packet dialers)
 
 	ws:tcp_path=[PATH]&udp_path=[PATH]
 
@@ -110,7 +134,7 @@ Happy Eyeballs to connect to the destination.
 
 	doh:name=[NAME]&address=[ADDRESS]
 
-Address override.
+Address override (stream and packet dialers).
 
 This dialer configuration is helpful for testing and development or if you need to fix the domain
 resolution.
@@ -131,45 +155,29 @@ It takes a list of count*length pairs meaning splitting the sequence in count se
 
 TLS fragmentation (streams only, package [golang.getoutline.org/sdk/transport/tlsfrag]).
 
-The Client Hello record payload will be split into two fragments of size LENGTH and len(payload)-LENGTH if LENGTH>0.
-If LENGTH<0, the two fragments will be of size len(payload)-LENGTH and LENGTH respectively.
+A positive LENGTH specifies the number of leading payload bytes in the first
+fragment of the TLS ClientHello record. A negative LENGTH specifies the number
+of trailing payload bytes in the second fragment (using its absolute value).
+A zero LENGTH disables fragmentation.
 For more details, refer to [golang.getoutline.org/sdk/transport/tlsfrag].
 
 	tlsfrag:[LENGTH]
 
 QUIC prelude (packet listeners only, package [golang.getoutline.org/sdk/x/quicprelude])
 
-Sends datagrams ahead of every packet that may carry a QUIC ClientHello, on the
-same socket and therefore the same four-tuple. Other traffic passes unchanged. A
-middlebox that reads the TLS Server Name Indication from the first QUIC Initial
-it can parse on a flow, and caches that verdict for the flow, finds no name in
-an Initial it cannot decrypt.
+Sends prelude datagrams before packets that may carry a QUIC ClientHello, using
+the same socket. Other traffic passes unchanged. See [golang.getoutline.org/sdk/x/quicprelude]
+for the mechanism and guidance on choosing a version.
 
 	quicprelude:count=[COUNT]&mode=[MODE]&length=[LENGTH]&version=[VERSION]
 
-Every option may be omitted, and the defaults are the ones to reach for first:
-one Initial-shaped datagram carrying a reserved version codepoint, sized to
-match the packet it precedes.
+All options are optional. By default, one Initial-shaped datagram with a reserved
+version precedes each eligible packet and matches its size.
 
 	count    number of datagrams, at most 16; 0 disables the prelude (default 1)
 	mode     invalid-initial or random (default invalid-initial)
 	length   match, or a byte count (default match)
 	version  reserved, draft, v1, v2, or a 32-bit hex codepoint (default reserved)
-
-length=match sizes each datagram like the packet it precedes, so the prelude is
-not separable from it by size. Only datagrams of at least 1200 bytes, the
-smallest RFC 9000 allows a client to send an Initial in, get a prelude, so a
-matched prelude is always a valid Initial size.
-
-version names a range to draw a fresh codepoint from for every datagram, so no
-single constant identifies the prelude. reserved uses 0x?a?a?a?a, which RFC 9000
-sets aside for forcing version negotiation; draft uses the IETF draft range
-above the draft numbers that were ever assigned.
-
-The range matters: measurements found that a codepoint no implementation would
-recognize is ignored rather than acted on, which defeats the technique. An
-assigned draft such as draft-29 is worse still, being dropped outright on the
-Iranian paths measured, which is why draft selection stays above them.
 
 Packet reordering (streams only, package [golang.getoutline.org/sdk/x/disorder])
 
@@ -185,69 +193,206 @@ connection.
 
 PACKET_NUMBER: The number of writes before the disorder action occurs. The
 disorder action triggers when the number of writes equals PACKET_NUMBER. If set
-to 0 (default), the disorder happens on the first write. If set to 1, it happens
+to 0, the disorder happens on the first write. If set to 1, it happens
 on the second write, and so on.
 
 # Examples
 
-Packet splitting - To split outgoing streams on bytes 2 and 123, you can use:
+The following strings can be passed to New[transport.StreamDialer]. Replace
+bracketed placeholders with your own values.
+
+Split outgoing streams at bytes 2 and 123:
 
 	split:2|split:123
 
-Disorder transport - Send some of the packets out of order:
+Split at byte 123, then apply disorder to the first write to help bypass filters
+that inspect the initial packets:
 
 	disorder:0|split:123
 
-Split at position 123, then send packet 0 of 123 bytes (from splitting) out of order. The network filter will first receive packet 1, only then packet 0. This
-is done by setting the hop limit for the write to 1, and then restoring it. It will be sent with its original hop limit on retransmission.
-
 Evading DNS and SNI blocking - You can use Cloudflare's DNS-over-HTTPS to protect against DNS disruption.
 The DoH resolver cloudflare-dns.com is accessible from any cloudflare.net IP, so you can specify the address to avoid blocking
-of the resolver itself. This can be combines with a TCP split or TLS Record Fragmentation to bypass SNI-based blocking:
+of the resolver itself. This can be combined with a TCP split or TLS Record Fragmentation to bypass SNI-based blocking:
 
 	doh:name=cloudflare-dns.com.&address=cloudflare.net.:443|split:2
 
-SOCKS5-over-TLS, with domain-fronting - To tunnel SOCKS5 over TLS, and set the SNI to decoy.example.com, while still validating against your host name, use:
+Tunnel SOCKS5 over TLS, sending decoy.example.com as SNI while validating the
+server certificate against HOST:
 
-	tls:sni=decoy.example.com&certname=[HOST]|socks5:[HOST]:[PORT]
+	tls:sni=decoy.example.com&certname=[HOST]|socks5://[HOST]:[PORT]
 
-Onion Routing with Shadowsocks - To route your traffic through three Shadowsocks servers, similar to [Onion Routing], use:
+Route traffic through three Shadowsocks servers, similar to [Onion Routing].
+HOST1 is the entry node and HOST3 is the exit node:
 
 	ss://[USERINFO1]@[HOST1]:[PORT1]|ss://[USERINFO2]@[HOST2]:[PORT2]|ss://[USERINFO3]@[HOST3]:[PORT3]
 
-In that case, HOST1 will be your entry node, and HOST3 will be your exit node.
-
-DPI Evasion - To add packet splitting to a Shadowsocks server for enhanced DPI evasion, use:
+Split the encrypted traffic sent to a Shadowsocks server:
 
 	split:2|ss://[USERINFO]@[HOST]:[PORT]
 
+# Usage
+
+Create a registry with [NewDefaultRegistry], then call [New] with the Go type of
+component you need. For example, this function creates a [transport.StreamDialer]
+that fragments the TLS ClientHello and splits the resulting stream:
+
+	import (
+		"context"
+
+		"golang.getoutline.org/sdk/transport"
+		"golang.getoutline.org/sdk/x/configurl"
+	)
+
+	func newDialer(ctx context.Context) (transport.StreamDialer, error) {
+		registry := configurl.NewDefaultRegistry()
+		return configurl.New[transport.StreamDialer](ctx, registry, "split:2|tlsfrag:1")
+	}
+
+After checking the error, use the returned dialer like any other SDK dialer.
+The registry associates a config URL scheme, such as split, with a [Parser]
+for a particular Go result type. New uses those parsers to construct the
+configured components and their dependencies.
+
+If the requested scheme or Go result type is unavailable, or its parser is
+disabled, [New] returns an error matching [errors.ErrUnsupported]. Check it with
+errors.Is(err, errors.ErrUnsupported). The same applies to unavailable dependencies
+and base components. Invalid URL syntax or malformed component options return
+parsing errors instead. Parser and construction errors, including cancellation,
+are propagated unchanged.
+
 # Defining custom strategies
 
-Core Concepts:
+To make a component available through a config URL, provide a [Parser] and
+register it with [Register]. A parser interprets its component's options,
+constructs its dependencies, and calls the component's ordinary Go constructor.
+The component itself does not need to know about config URLs.
 
-  - [ProviderContainer]: A central registry for managing different types of network object builders (StreamDialers, PacketDialers, PacketListeners).
-  - [ExtensibleProvider]: A type that provides a mechanism to register and retrieve builders for specific subtypes of network objects.
-  - [BuildFunc]: A function that creates an instance of a network object from a parsed configuration.
-  - [Config]: A parsed representation of the configuration string.
-  - [TypeRegistry]: An interface for registering new transport types.
+[ParseConfig] handles the shared URL-chain syntax and returns a [Config]:
+URL contains the current component's URL, and BaseConfig describes the entire
+configuration to its left. [NewFromConfig] constructs a dependency from that
+BaseConfig. For the leftmost component, BaseConfig is nil, so NewFromConfig
+invokes the default base parser for the requested type.
 
-You can define your custom strategy by implementing and registering [BuildFunc[ObjectType]] functions:
+For example, a delay component can wait before opening each connection. Its
+constructor accepts a base dialer and a duration, so apps can use it directly
+without config URLs:
 
-	// Create new config parser.
-	// p := configurl.NewProviderContainer()
-	// or
-	p := configurl.NewDefaultProviders()
-	// Register your custom dialer.
-	p.StreamDialers.RegisterType("custom", func(ctx context.Context, config *Config) (transport.StreamDialer, error) {
-	  // Build logic
-	  // ...
-	})
-	p.PacketDialers.RegisterType("custom", func(ctx context.Context, config *Config) (transport.PacketDialer, error) {
-	  // Build logic
-	  // ...
-	})
-	// Then use it
-	dialer, err := p.NewStreamDialer(context.Background(), "custom://config")
+	import (
+		"context"
+		"errors"
+		"time"
+
+		"golang.getoutline.org/sdk/transport"
+	)
+
+	// NewDelayDialer waits before opening each connection through base.
+	func NewDelayDialer(base transport.StreamDialer, delay time.Duration) (transport.StreamDialer, error) {
+		if base == nil {
+			return nil, errors.New("delay: base dialer must not be nil")
+		}
+		if delay <= 0 {
+			return nil, errors.New("delay: duration must be positive")
+		}
+		dialStream := func(ctx context.Context, address string) (transport.StreamConn, error) {
+			timer := time.NewTimer(delay)
+			defer timer.Stop()
+			select {
+			case <-ctx.Done():
+				return nil, ctx.Err()
+			case <-timer.C:
+				return base.DialStream(ctx, address)
+			}
+		}
+		return transport.FuncStreamDialer(dialStream), nil
+	}
+
+In a separate file in the same component package, add a parser for
+delay:<duration>, such as delay:100ms, and a registration helper:
+
+	import (
+		"context"
+		"fmt"
+		"time"
+
+		"golang.getoutline.org/sdk/transport"
+		"golang.getoutline.org/sdk/x/configurl"
+	)
+
+	func parseDelayDialer(ctx context.Context, registry configurl.Registry, config *configurl.Config) (transport.StreamDialer, error) {
+		delay, err := time.ParseDuration(config.URL.Opaque)
+		if err != nil {
+			return nil, fmt.Errorf("delay: invalid duration: %w", err)
+		}
+		base, err := configurl.NewFromConfig[transport.StreamDialer](ctx, registry, config.BaseConfig)
+		if err != nil {
+			return nil, err
+		}
+		return NewDelayDialer(base, delay)
+	}
+
+	// RegisterDelay registers the delay parser under name.
+	func RegisterDelay(registry configurl.MutableRegistry, name string) {
+		configurl.Register(registry, name, parseDelayDialer)
+	}
+
+A component library can publish both NewDelayDialer and RegisterDelay from its
+own package. Apps import the library and call its registration helper on their
+registry. Assuming the library is imported as components, an app can use:
+
+	func newDelayedDialer(ctx context.Context) (transport.StreamDialer, error) {
+		registry := configurl.NewDefaultRegistry()
+		components.RegisterDelay(registry, "delay")
+		return configurl.New[transport.StreamDialer](ctx, registry, "split:2|delay:100ms")
+	}
+
+The delay parser reads 100ms from config.URL.Opaque and asks NewFromConfig to
+construct split:2 as its base. Each dial waits 100 milliseconds before calling
+that base; cancellation can end the wait early. Register infers the result type
+transport.StreamDialer from the parser's signature. Registrations match Go types
+exactly: a parser returning *MyDialer must instead return transport.StreamDialer
+if it is to be used by New[transport.StreamDialer].
+
+Always forward the supplied registry and ctx when constructing dependencies.
+The registry used for construction may wrap the one used for registration to
+override a dependency. Capturing the registration registry would bypass that
+override. The context controls construction; returned components should use the
+context of each later dial or listen operation instead of retaining it.
+
+# Custom base components
+
+Use [RegisterBase] to change the component returned for an empty configuration
+or when a parser reaches the left end of a chain. For example, if base is an
+existing transport.StreamDialer, register a parser that returns it:
+
+	parseBase := func(context.Context, configurl.Registry, *configurl.Config) (transport.StreamDialer, error) {
+		return base, nil
+	}
+	configurl.RegisterBase(registry, parseBase)
+
+Now split:2 and split:2|delay:100ms both build on that dialer. Packet bases are
+unchanged because registrations are specific to a Go result type.
+RegisterBase is a convenience for Register with an empty name. A base parser
+receives a nil Config; it can return an existing instance, as above, or create one.
+
+Complete registration before constructing and using components. Replacing a
+registration affects subsequent construction, not objects already created.
+
+# Registry interfaces
+
+Use [MutableRegistry] in registration helpers and the read-only [Registry]
+interface in code that only constructs components. The registry supports
+arbitrary Go result types, beyond the built-in transport interfaces. A custom
+result type needs a base registration only if its parser requests the default
+base for that type.
+[Lookup] retrieves a typed parser without invoking it, which is useful when
+wrapping an existing registration.
+
+For custom registry implementations, [Registry.Lookup] and [MutableRegistry.Register]
+use any to store Parser[T] values unchanged. Prefer the generic Register and
+Lookup helpers in application code: Register checks the signature at compile
+time, and Lookup checks the exact Parser[T] type when retrieving it. Direct
+callers of MutableRegistry.Register must explicitly convert ordinary functions
+to Parser[T]. A registered nil parser disables an entry.
 
 [Onion Routing]: https://en.wikipedia.org/wiki/Onion_routing
 */

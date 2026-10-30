@@ -23,17 +23,15 @@ import (
 	"golang.getoutline.org/sdk/transport/tlsfrag"
 )
 
-func registerTLSFragStreamDialer(r TypeRegistry[transport.StreamDialer], typeID string, newSD BuildFunc[transport.StreamDialer]) {
-	r.RegisterType(typeID, func(ctx context.Context, config *Config) (transport.StreamDialer, error) {
-		sd, err := newSD(ctx, config.BaseConfig)
-		if err != nil {
-			return nil, err
-		}
-		lenStr := config.URL.Opaque
-		fixedLen, err := strconv.Atoi(lenStr)
-		if err != nil {
-			return nil, fmt.Errorf("invalid tlsfrag option: %v. It should be in tlsfrag:<number> format", lenStr)
-		}
-		return tlsfrag.NewFixedLenStreamDialer(sd, fixedLen)
-	})
+func parseTLSFragStreamDialer(ctx context.Context, registry Registry, config *Config) (transport.StreamDialer, error) {
+	sd, err := NewFromConfig[transport.StreamDialer](ctx, registry, config.BaseConfig)
+	if err != nil {
+		return nil, err
+	}
+	lenStr := config.URL.Opaque
+	fixedLen, err := strconv.Atoi(lenStr)
+	if err != nil {
+		return nil, fmt.Errorf("invalid tlsfrag option: %v. It should be in tlsfrag:<number> format", lenStr)
+	}
+	return tlsfrag.NewFixedLenStreamDialer(sd, fixedLen)
 }

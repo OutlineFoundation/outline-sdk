@@ -27,6 +27,7 @@ import (
 	"time"
 
 	"golang.getoutline.org/sdk/dns"
+	"golang.getoutline.org/sdk/transport"
 	"golang.getoutline.org/sdk/x/configurl"
 	"golang.org/x/net/dns/dnsmessage"
 )
@@ -66,15 +67,15 @@ func main() {
 	resolverAddr := *resolverFlag
 
 	var resolver dns.Resolver
-	providers := configurl.NewDefaultProviders()
+	registry := configurl.NewDefaultRegistry()
 	if *tcpFlag {
-		streamDialer, err := providers.NewStreamDialer(context.Background(), *transportFlag)
+		streamDialer, err := configurl.New[transport.StreamDialer](context.Background(), registry, *transportFlag)
 		if err != nil {
 			log.Fatalf("Could not create stream dialer: %v", err)
 		}
 		resolver = dns.NewTCPResolver(streamDialer, resolverAddr)
 	} else {
-		packetDialer, err := providers.NewPacketDialer(context.Background(), *transportFlag)
+		packetDialer, err := configurl.New[transport.PacketDialer](context.Background(), registry, *transportFlag)
 		if err != nil {
 			log.Fatalf("Could not create packet dialer: %v", err)
 		}

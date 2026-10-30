@@ -31,12 +31,12 @@ import (
 	"sync"
 	"time"
 
+	"github.com/lmittmann/tint"
 	"golang.getoutline.org/sdk/dns"
 	"golang.getoutline.org/sdk/transport"
 	"golang.getoutline.org/sdk/x/configurl"
 	"golang.getoutline.org/sdk/x/connectivity"
 	"golang.getoutline.org/sdk/x/report"
-	"github.com/lmittmann/tint"
 	"golang.org/x/term"
 )
 
@@ -240,7 +240,7 @@ func main() {
 			var mu sync.Mutex
 			dnsReports := make([]dnsReport, 0)
 			tcpReports := make([]tcpReport, 0)
-			providers := configurl.NewDefaultProviders()
+			registry := configurl.NewDefaultRegistry()
 			onDNS := func(ctx context.Context, domain string) func(di httptrace.DNSDoneInfo) {
 				dnsStart := time.Now()
 				return func(di httptrace.DNSDoneInfo) {
@@ -260,7 +260,7 @@ func main() {
 					mu.Unlock()
 				}
 			}
-			providers.StreamDialers.BaseInstance = transport.FuncStreamDialer(func(ctx context.Context, addr string) (transport.StreamConn, error) {
+			dialStream := func(ctx context.Context, addr string) (transport.StreamConn, error) {
 				hostname, _, err := net.SplitHostPort(addr)
 				if err != nil {
 					return nil, err
@@ -283,14 +283,24 @@ func main() {
 					mu.Unlock()
 				}
 				return newTCPTraceDialer(onDNS, onDial).DialStream(ctx, addr)
-			})
-			providers.PacketDialers.BaseInstance = transport.FuncPacketDialer(func(ctx context.Context, addr string) (net.Conn, error) {
+			}
+			baseSD := transport.FuncStreamDialer(dialStream)
+			newStreamBase := func(context.Context, configurl.Registry, *configurl.Config) (transport.StreamDialer, error) {
+				return baseSD, nil
+			}
+			configurl.RegisterBase(registry, newStreamBase)
+			dialPacket := func(ctx context.Context, addr string) (net.Conn, error) {
 				return newUDPTraceDialer(onDNS).DialPacket(ctx, addr)
-			})
+			}
+			basePD := transport.FuncPacketDialer(dialPacket)
+			newPacketBase := func(context.Context, configurl.Registry, *configurl.Config) (transport.PacketDialer, error) {
+				return basePD, nil
+			}
+			configurl.RegisterBase(registry, newPacketBase)
 
 			switch proto {
 			case "tcp":
-				streamDialer, err := providers.NewStreamDialer(context.Background(), *transportFlag)
+				streamDialer, err := configurl.New[transport.StreamDialer](context.Background(), registry, *transportFlag)
 				if err != nil {
 					slog.Error("Failed to create StreamDialer", "error", err)
 					os.Exit(1)
@@ -298,7 +308,7 @@ func main() {
 				resolver = dns.NewTCPResolver(streamDialer, resolverAddress)
 
 			case "udp":
-				packetDialer, err := providers.NewPacketDialer(context.Background(), *transportFlag)
+				packetDialer, err := configurl.New[transport.PacketDialer](context.Background(), registry, *transportFlag)
 				if err != nil {
 					slog.Error("Failed to create PacketDialer", "error", err)
 					os.Exit(1)
