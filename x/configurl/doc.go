@@ -13,8 +13,21 @@
 // limitations under the License.
 
 /*
-Package configurl constructs [transport.StreamDialer], [transport.PacketDialer],
-and [transport.PacketListener] components from composable config URL strings.
+Package configurl provides a flexible and extensible framework for constructing a network of components from textual configurations.
+This enables dynamic, composable, and easily shared transport configurations, making it ideal for complex networking scenarios.
+
+This package is currently experimental and primarily serves as a demonstration of its capabilities and potential use cases.
+
+Key Features:
+
+  - Ease of Use: Define and create complex transport stacks using simple, human-readable text strings.
+  - Serialization: Easily share and persist configurations between different components or users.
+  - Dynamic Configuration: Modify an application's transport behavior at runtime.
+  - Composability: Nest and combine various transport strategies to create sophisticated configurations.
+  - DPI Evasion: Implement advanced strategies like packet splitting and TLS fragmentation to evade Deep Packet Inspection (DPI).
+  - Extensibility: Define custom transport strategies and integrate them seamlessly.
+
+# Usage
 
 Create a [MutableRegistry] with [NewDefaultRegistry] to use the SDK's built-in
 components, then call [New] with the type of component to construct:
