@@ -371,13 +371,13 @@ func (f *finder) findTLS(
 	// Overlay only the stream base so every TLS attempt, including nested
 	// components, shares the selected DNS dialer and cache. All other entries
 	// come from the original registry, which stays unchanged for other searches.
-	newBase := func(context.Context, configurl.Registry, *configurl.Config) (transport.StreamDialer, error) {
+	parseBase := func(context.Context, configurl.Registry, *configurl.Config) (transport.StreamDialer, error) {
 		return baseDialer, nil
 	}
 	registry := overlayRegistry{
 		top: registryMap{
 			reflect.TypeFor[transport.StreamDialer](): {
-				"": configurl.Constructor[transport.StreamDialer](newBase),
+				"": configurl.Parser[transport.StreamDialer](parseBase),
 			},
 		},
 		bottom: f.registry,

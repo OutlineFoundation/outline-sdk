@@ -21,7 +21,7 @@ import (
 )
 
 // overlayRegistry looks up entries in top before falling back to bottom.
-// Entries present in top, including nil constructors, override bottom.
+// Entries present in top, including nil parsers, override bottom.
 type overlayRegistry struct {
 	top    configurl.Registry
 	bottom configurl.Registry
@@ -29,17 +29,17 @@ type overlayRegistry struct {
 
 // Lookup implements [configurl.Registry].
 func (r overlayRegistry) Lookup(resultType reflect.Type, name string) (any, bool) {
-	if constructor, ok := r.top.Lookup(resultType, name); ok {
-		return constructor, true
+	if parser, ok := r.top.Lookup(resultType, name); ok {
+		return parser, true
 	}
 	return r.bottom.Lookup(resultType, name)
 }
 
-// registryMap holds explicitly supplied constructors. Populate it before use.
+// registryMap holds explicitly supplied parsers. Populate it before use.
 type registryMap map[reflect.Type]map[string]any
 
 // Lookup implements [configurl.Registry].
 func (r registryMap) Lookup(resultType reflect.Type, name string) (any, bool) {
-	constructor, ok := r[resultType][name]
-	return constructor, ok
+	parser, ok := r[resultType][name]
+	return parser, ok
 }

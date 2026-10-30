@@ -49,33 +49,33 @@ type StrategyFinder struct {
 	// passed to FinderOptions.SetConfigURLRegistry instead.
 	PacketDialer transport.PacketDialer
 
-	// registryOnce initializes the legacy base constructors before concurrent searches.
+	// registryOnce initializes the legacy base parsers before concurrent searches.
 	registryOnce    sync.Once
 	registry        configurl.Registry
 	fallbackParsers map[string]FallbackParser
 }
 
-// initLegacyRegistry registers base constructors that read the current legacy
+// initLegacyRegistry registers base parsers that read the current legacy
 // dialer fields. Changes between searches affect new dialers, while previously
 // constructed dialers keep their original bases.
 func (f *StrategyFinder) initLegacyRegistry() {
 	registry := configurl.NewDefaultRegistry()
 	defaultSD := &transport.TCPDialer{}
-	newStreamDialer := func(context.Context, configurl.Registry, *configurl.Config) (transport.StreamDialer, error) {
+	parseStreamDialer := func(context.Context, configurl.Registry, *configurl.Config) (transport.StreamDialer, error) {
 		if streamDialer := f.StreamDialer; streamDialer != nil {
 			return streamDialer, nil
 		}
 		return defaultSD, nil
 	}
-	configurl.RegisterBase(registry, newStreamDialer)
+	configurl.RegisterBase(registry, parseStreamDialer)
 	defaultPD := &transport.UDPDialer{}
-	newPacketDialer := func(context.Context, configurl.Registry, *configurl.Config) (transport.PacketDialer, error) {
+	parsePacketDialer := func(context.Context, configurl.Registry, *configurl.Config) (transport.PacketDialer, error) {
 		if packetDialer := f.PacketDialer; packetDialer != nil {
 			return packetDialer, nil
 		}
 		return defaultPD, nil
 	}
-	configurl.RegisterBase(registry, newPacketDialer)
+	configurl.RegisterBase(registry, parsePacketDialer)
 	f.registry = registry
 }
 

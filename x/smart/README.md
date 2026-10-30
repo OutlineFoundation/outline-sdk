@@ -180,7 +180,7 @@ name string)` from a Go wrapper package for mobile bindings.
 
 Use `configurl.Register` for named parsers and `RegisterBase` for a default base
 parser. To reuse an existing dialer, register a parser that returns it.
-Component constructors receive `(ctx, registry, config)`. Use that registry when calling
+Component parsers receive `(ctx, registry, config)`. Use that registry when calling
 `configurl.NewFromConfig[transport.StreamDialer](ctx, registry, config.BaseConfig)` to
 construct its dependency. Fallback parsers
 can capture the same registry and call `configurl.New[transport.StreamDialer]`

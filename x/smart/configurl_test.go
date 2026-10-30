@@ -35,15 +35,15 @@ func TestTLSSearchUsesRegistryAndKeepsBasesSeparate(t *testing.T) {
 	configurl.RegisterBase(registry, func(context.Context, configurl.Registry, *configurl.Config) (transport.StreamDialer, error) {
 		return namedDialer("fallback"), nil
 	})
-	newInstance := func(ctx context.Context, registry configurl.Registry, cfg *configurl.Config) (transport.StreamDialer, error) {
+	parse := func(ctx context.Context, registry configurl.Registry, cfg *configurl.Config) (transport.StreamDialer, error) {
 		return configurl.NewFromConfig[transport.StreamDialer](ctx, registry, cfg.BaseConfig)
 	}
-	configurl.Register[transport.StreamDialer](registry, "custom", newInstance)
+	configurl.Register[transport.StreamDialer](registry, "custom", parse)
 	// Independently parsed nested configs must receive the same registry base.
-	newNested := func(ctx context.Context, registry configurl.Registry, cfg *configurl.Config) (transport.StreamDialer, error) {
+	parseNested := func(ctx context.Context, registry configurl.Registry, cfg *configurl.Config) (transport.StreamDialer, error) {
 		return configurl.New[transport.StreamDialer](ctx, registry, cfg.URL.Opaque)
 	}
-	configurl.Register(registry, "nested", newNested)
+	configurl.Register(registry, "nested", parseNested)
 	opts := NewFinderOptions().SetConfigURLRegistry(registry)
 	sharedFinder, err := opts.New()
 	require.NoError(t, err)
@@ -144,7 +144,7 @@ func TestTLSAttemptsReuseDNSDialerAndCache(t *testing.T) {
 	})
 	var mu sync.Mutex
 	var bases []transport.StreamDialer
-	newInstance := func(ctx context.Context, registry configurl.Registry, cfg *configurl.Config) (transport.StreamDialer, error) {
+	parse := func(ctx context.Context, registry configurl.Registry, cfg *configurl.Config) (transport.StreamDialer, error) {
 		base, err := configurl.NewFromConfig[transport.StreamDialer](ctx, registry, cfg.BaseConfig)
 		if err != nil {
 			return nil, err
@@ -163,7 +163,7 @@ func TestTLSAttemptsReuseDNSDialerAndCache(t *testing.T) {
 		}
 		return base, nil
 	}
-	configurl.Register[transport.StreamDialer](registry, "probe", newInstance)
+	configurl.Register[transport.StreamDialer](registry, "probe", parse)
 	cache := &memoryStrategyCache{}
 	f, err := NewFinderOptions().SetConfigURLRegistry(registry).SetCache(cache).New()
 	require.NoError(t, err)
@@ -239,7 +239,7 @@ func TestTLSRegistryOverrideLeavesOriginalBaseUntouched(t *testing.T) {
 	registry := configurl.NewDefaultRegistry()
 	var originalCalls atomic.Int32
 	originalErr := errors.New("original base error")
-	newOriginal := func(ctx context.Context, _ configurl.Registry, cfg *configurl.Config) (transport.StreamDialer, error) {
+	parseOriginal := func(ctx context.Context, _ configurl.Registry, cfg *configurl.Config) (transport.StreamDialer, error) {
 		originalCalls.Add(1)
 		if cfg != nil {
 			return nil, errors.New("base received non-nil config")
@@ -249,7 +249,7 @@ func TestTLSRegistryOverrideLeavesOriginalBaseUntouched(t *testing.T) {
 		}
 		return nil, originalErr
 	}
-	configurl.RegisterBase(registry, newOriginal)
+	configurl.RegisterBase(registry, parseOriginal)
 	readOnly := readOnlyRegistry{registry}
 	opts := NewFinderOptions().SetConfigURLRegistry(readOnly)
 	ctx := context.WithValue(context.Background(), traceKey{}, "trace")

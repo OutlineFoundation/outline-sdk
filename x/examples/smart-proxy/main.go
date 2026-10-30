@@ -112,14 +112,14 @@ func main() {
 		})
 	}
 
-	newStreamDialer := func(context.Context, configurl.Registry, *configurl.Config) (transport.StreamDialer, error) {
+	parseStreamDialer := func(context.Context, configurl.Registry, *configurl.Config) (transport.StreamDialer, error) {
 		return streamDialer, nil
 	}
-	configurl.RegisterBase(registry, newStreamDialer)
-	newPacketDialer := func(context.Context, configurl.Registry, *configurl.Config) (transport.PacketDialer, error) {
+	configurl.RegisterBase(registry, parseStreamDialer)
+	parsePacketDialer := func(context.Context, configurl.Registry, *configurl.Config) (transport.PacketDialer, error) {
 		return packetDialer, nil
 	}
-	configurl.RegisterBase(registry, newPacketDialer)
+	configurl.RegisterBase(registry, parsePacketDialer)
 	opts := smart.NewFinderOptions().
 		SetConfigURLRegistry(registry).
 		SetLogWriter(debugLog.Writer()).

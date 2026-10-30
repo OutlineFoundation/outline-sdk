@@ -25,7 +25,7 @@ import (
 	"golang.getoutline.org/sdk/x/quicprelude"
 )
 
-func newQUICPreludePacketListener(ctx context.Context, registry Registry, config *Config) (transport.PacketListener, error) {
+func parseQUICPreludePacketListener(ctx context.Context, registry Registry, config *Config) (transport.PacketListener, error) {
 	inner, err := NewFromConfig[transport.PacketListener](ctx, registry, config.BaseConfig)
 	if err != nil {
 		return nil, err

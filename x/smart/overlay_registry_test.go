@@ -31,16 +31,16 @@ func TestOverlayRegistryConstruction(t *testing.T) {
 	configurl.Register(bottom, "value", func(context.Context, configurl.Registry, *configurl.Config) (string, error) {
 		return "bottom", nil
 	})
-	newNested := func(ctx context.Context, registry configurl.Registry, _ *configurl.Config) (int, error) {
+	parseNested := func(ctx context.Context, registry configurl.Registry, _ *configurl.Config) (int, error) {
 		return configurl.New[int](ctx, registry, "value")
 	}
-	configurl.Register(bottom, "nested", newNested)
-	newValue := func(context.Context, configurl.Registry, *configurl.Config) (int, error) {
+	configurl.Register(bottom, "nested", parseNested)
+	parseValue := func(context.Context, configurl.Registry, *configurl.Config) (int, error) {
 		return 2, nil
 	}
 	registry := overlayRegistry{
 		top: registryMap{
-			reflect.TypeFor[int](): {"value": configurl.Constructor[int](newValue)},
+			reflect.TypeFor[int](): {"value": configurl.Parser[int](parseValue)},
 		},
 		bottom: bottom,
 	}
@@ -48,7 +48,7 @@ func TestOverlayRegistryConstruction(t *testing.T) {
 	for _, name := range []string{"value", "nested"} {
 		value, err := configurl.New[int](ctx, registry, name)
 		require.NoError(t, err)
-		require.Equal(t, 2, value, "constructors from either layer use the overlay for dependencies")
+		require.Equal(t, 2, value, "parsers from either layer use the overlay for dependencies")
 	}
 	text, err := configurl.New[string](ctx, registry, "value")
 	require.NoError(t, err)
@@ -63,16 +63,16 @@ func TestOverlayRegistryConstruction(t *testing.T) {
 func TestOverlayRegistryDisabledEntries(t *testing.T) {
 	bottom := configurl.NewRegistry()
 	configurl.Register(bottom, "value", func(context.Context, configurl.Registry, *configurl.Config) (int, error) {
-		t.Fatal("a disabled top entry must not use the bottom constructor")
+		t.Fatal("a disabled top entry must not use the bottom parser")
 		return 0, nil
 	})
-	for name, constructor := range map[string]any{
+	for name, parser := range map[string]any{
 		"nil":   nil,
-		"typed": configurl.Constructor[int](nil),
+		"typed": configurl.Parser[int](nil),
 	} {
 		t.Run(name, func(t *testing.T) {
 			registry := overlayRegistry{
-				top:    registryMap{reflect.TypeFor[int](): {"value": constructor}},
+				top:    registryMap{reflect.TypeFor[int](): {"value": parser}},
 				bottom: bottom,
 			}
 			_, err := configurl.New[int](context.Background(), registry, "value")

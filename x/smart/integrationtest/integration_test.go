@@ -133,15 +133,15 @@ fallback:
 		untrustedHTTPSServerAddr: ts.Listener.Addr().String(),
 		captivePortalServerAddr:  captivePortalAddr,
 	}
-	newStreamDialer := func(context.Context, configurl.Registry, *configurl.Config) (transport.StreamDialer, error) {
+	parseStreamDialer := func(context.Context, configurl.Registry, *configurl.Config) (transport.StreamDialer, error) {
 		return streamDialer, nil
 	}
-	configurl.RegisterBase(registry, newStreamDialer)
+	configurl.RegisterBase(registry, parseStreamDialer)
 	packetDialer := &errorPacketDialer{}
-	newPacketDialer := func(context.Context, configurl.Registry, *configurl.Config) (transport.PacketDialer, error) {
+	parsePacketDialer := func(context.Context, configurl.Registry, *configurl.Config) (transport.PacketDialer, error) {
 		return packetDialer, nil
 	}
-	configurl.RegisterBase(registry, newPacketDialer)
+	configurl.RegisterBase(registry, parsePacketDialer)
 	opts := smart.NewFinderOptions().
 		SetConfigURLRegistry(registry).
 		SetLogWriter(logger.Writer()).

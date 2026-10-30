@@ -24,7 +24,7 @@ import (
 	"golang.getoutline.org/sdk/transport/split"
 )
 
-func newSplitStreamDialer(ctx context.Context, registry Registry, config *Config) (transport.StreamDialer, error) {
+func parseSplitStreamDialer(ctx context.Context, registry Registry, config *Config) (transport.StreamDialer, error) {
 	sd, err := NewFromConfig[transport.StreamDialer](ctx, registry, config.BaseConfig)
 	if err != nil {
 		return nil, err

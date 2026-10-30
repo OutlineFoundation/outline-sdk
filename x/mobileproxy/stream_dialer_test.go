@@ -90,10 +90,10 @@ func TestSmartDialerReplacementRegistry(t *testing.T) {
 	dialStream := func(context.Context, string) (transport.StreamConn, error) { return nil, baseErr }
 	replacement := configurl.NewDefaultRegistry()
 	baseDialer := transport.FuncStreamDialer(dialStream)
-	newInstance := func(context.Context, configurl.Registry, *configurl.Config) (transport.StreamDialer, error) {
+	parse := func(context.Context, configurl.Registry, *configurl.Config) (transport.StreamDialer, error) {
 		return baseDialer, nil
 	}
-	configurl.RegisterBase(replacement, newInstance)
+	configurl.RegisterBase(replacement, parse)
 	require.Same(t, opts, opts.SetConfigURLRegistry(replacement))
 	require.Same(t, replacement, opts.ConfigURLRegistry())
 	dialer, err := opts.NewStreamDialer()

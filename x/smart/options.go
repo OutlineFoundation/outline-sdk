@@ -50,7 +50,7 @@ func NewFinderOptions() *FinderOptions {
 
 // SetConfigURLRegistry shares registry with the finders created by New. A nil
 // registry selects a fresh default registry for each New call. Complete
-// registrations before New. Finders only look up constructors in this registry;
+// registrations before New. Finders only look up parsers in this registry;
 // each TLS search uses a separate wrapper to supply its selected DNS dialer.
 func (o *FinderOptions) SetConfigURLRegistry(registry configurl.Registry) *FinderOptions {
 	o.configURLRegistry = registry

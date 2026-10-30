@@ -21,12 +21,12 @@ import (
 	"golang.getoutline.org/sdk/transport/socks5"
 )
 
-func newSOCKS5StreamDialer(ctx context.Context, registry Registry, config *Config) (transport.StreamDialer, error) {
-	return newSOCKS5Client(ctx, registry, *config)
+func parseSOCKS5StreamDialer(ctx context.Context, registry Registry, config *Config) (transport.StreamDialer, error) {
+	return parseSOCKS5Client(ctx, registry, *config)
 }
 
-func newSOCKS5PacketDialer(ctx context.Context, registry Registry, config *Config) (transport.PacketDialer, error) {
-	client, err := newSOCKS5Client(ctx, registry, *config)
+func parseSOCKS5PacketDialer(ctx context.Context, registry Registry, config *Config) (transport.PacketDialer, error) {
+	client, err := parseSOCKS5Client(ctx, registry, *config)
 	if err != nil {
 		return nil, err
 	}
@@ -38,8 +38,8 @@ func newSOCKS5PacketDialer(ctx context.Context, registry Registry, config *Confi
 	return transport.PacketListenerDialer{Listener: client}, nil
 }
 
-func newSOCKS5PacketListener(ctx context.Context, registry Registry, config *Config) (transport.PacketListener, error) {
-	client, err := newSOCKS5Client(ctx, registry, *config)
+func parseSOCKS5PacketListener(ctx context.Context, registry Registry, config *Config) (transport.PacketListener, error) {
+	client, err := parseSOCKS5Client(ctx, registry, *config)
 	if err != nil {
 		return nil, err
 	}
@@ -51,7 +51,7 @@ func newSOCKS5PacketListener(ctx context.Context, registry Registry, config *Con
 	return client, nil
 }
 
-func newSOCKS5Client(ctx context.Context, registry Registry, config Config) (*socks5.Client, error) {
+func parseSOCKS5Client(ctx context.Context, registry Registry, config Config) (*socks5.Client, error) {
 	sd, err := NewFromConfig[transport.StreamDialer](ctx, registry, config.BaseConfig)
 	if err != nil {
 		return nil, err

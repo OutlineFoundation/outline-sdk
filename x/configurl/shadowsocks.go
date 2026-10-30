@@ -26,7 +26,7 @@ import (
 	"golang.getoutline.org/sdk/transport/shadowsocks"
 )
 
-func newShadowsocksStreamDialer(ctx context.Context, registry Registry, config *Config) (transport.StreamDialer, error) {
+func parseShadowsocksStreamDialer(ctx context.Context, registry Registry, config *Config) (transport.StreamDialer, error) {
 	sd, err := NewFromConfig[transport.StreamDialer](ctx, registry, config.BaseConfig)
 	if err != nil {
 		return nil, err
@@ -46,7 +46,7 @@ func newShadowsocksStreamDialer(ctx context.Context, registry Registry, config *
 	return dialer, nil
 }
 
-func newShadowsocksPacketDialer(ctx context.Context, registry Registry, config *Config) (transport.PacketDialer, error) {
+func parseShadowsocksPacketDialer(ctx context.Context, registry Registry, config *Config) (transport.PacketDialer, error) {
 	pd, err := NewFromConfig[transport.PacketDialer](ctx, registry, config.BaseConfig)
 	if err != nil {
 		return nil, err
@@ -64,7 +64,7 @@ func newShadowsocksPacketDialer(ctx context.Context, registry Registry, config *
 	return transport.PacketListenerDialer{Listener: pl}, nil
 }
 
-func newShadowsocksPacketListener(ctx context.Context, registry Registry, config *Config) (transport.PacketListener, error) {
+func parseShadowsocksPacketListener(ctx context.Context, registry Registry, config *Config) (transport.PacketListener, error) {
 	pd, err := NewFromConfig[transport.PacketDialer](ctx, registry, config.BaseConfig)
 	if err != nil {
 		return nil, err
