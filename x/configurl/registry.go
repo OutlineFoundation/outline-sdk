@@ -16,6 +16,7 @@ package configurl
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"reflect"
 	"sync"
@@ -102,6 +103,7 @@ func RegisterBase[T any](r MutableRegistry, parser Parser[T]) {
 // Lookup returns a typed parser without invoking it. It checks that the stored
 // value is a Parser[T]. Capturing it before replacing a registration
 // lets a new parser delegate to the previous parser.
+// If the registration is missing or disabled, the error wraps [errors.ErrUnsupported].
 func Lookup[T any](r Registry, name string) (Parser[T], error) {
 	resultType := reflect.TypeFor[T]()
 	if r == nil {
@@ -109,23 +111,25 @@ func Lookup[T any](r Registry, name string) (Parser[T], error) {
 	}
 	parser, ok := r.Lookup(resultType, name)
 	if !ok {
-		return nil, fmt.Errorf("%v config type %q is not registered", resultType, name)
+		return nil, fmt.Errorf("%.0w%v config type %q is not registered", errors.ErrUnsupported, resultType, name)
 	}
 	if parser == nil {
-		return nil, fmt.Errorf("%v config type %q parser is nil", resultType, name)
+		return nil, fmt.Errorf("%.0w%v config type %q parser is nil", errors.ErrUnsupported, resultType, name)
 	}
 	parse, ok := parser.(Parser[T])
 	if !ok {
 		return nil, fmt.Errorf("%v config type %q has incompatible parser type %T", resultType, name, parser)
 	}
 	if parse == nil {
-		return nil, fmt.Errorf("%v config type %q parser is nil", resultType, name)
+		return nil, fmt.Errorf("%.0w%v config type %q parser is nil", errors.ErrUnsupported, resultType, name)
 	}
 	return parse, nil
 }
 
 // NewFromConfig constructs a T from a parsed config. A nil config invokes the base parser.
 // The parser receives r so it can use the same registry for dependencies.
+// Missing or disabled registrations return an error wrapping [errors.ErrUnsupported].
+// Errors from the parser, including its dependencies, are returned unchanged.
 func NewFromConfig[T any](ctx context.Context, r Registry, config *Config) (T, error) {
 	name := ""
 	if config != nil {
@@ -145,6 +149,8 @@ func NewFromConfig[T any](ctx context.Context, r Registry, config *Config) (T, e
 
 // New constructs a T from a config URL string. An empty or whitespace-only string
 // invokes the base parser. Use NewFromConfig when the config is already parsed.
+// Missing or disabled registrations return an error wrapping [errors.ErrUnsupported].
+// Invalid URL syntax and component options return parsing errors instead.
 func New[T any](ctx context.Context, r Registry, configText string) (T, error) {
 	config, err := ParseConfig(configText)
 	if err != nil {
