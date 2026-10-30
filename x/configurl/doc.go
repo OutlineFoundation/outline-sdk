@@ -27,35 +27,12 @@ Key Features:
   - DPI Evasion: Implement advanced strategies like packet splitting and TLS fragmentation to evade Deep Packet Inspection (DPI).
   - Extensibility: Define custom transport strategies and integrate them seamlessly.
 
-# Usage
-
-Create a registry with [NewDefaultRegistry], then call [New] with the Go type of
-component you need. For example, this function creates a [transport.StreamDialer]
-that fragments the TLS ClientHello and splits the resulting stream:
-
-	import (
-		"context"
-
-		"golang.getoutline.org/sdk/transport"
-		"golang.getoutline.org/sdk/x/configurl"
-	)
-
-	func newDialer(ctx context.Context) (transport.StreamDialer, error) {
-		registry := configurl.NewDefaultRegistry()
-		return configurl.New[transport.StreamDialer](ctx, registry, "split:2|tlsfrag:1")
-	}
-
-After checking the error, use the returned dialer like any other SDK dialer.
-The registry associates a config URL scheme, such as split, with a [Parser]
-for a particular Go result type. New uses those parsers to construct the
-configured components and their dependencies.
-
-# Configuration format
+# Configuration Format
 
 A configuration is a pipe-separated sequence of component definitions. A
 component can use the configuration on its left to construct its dependencies.
 For wrapping components, A|B|C means A wraps the default base, B wraps A, and C
-wraps B. New returns C.
+wraps B. The resulting component is C.
 
 For example, split:2|tlsfrag:1 builds these layers:
 
@@ -78,13 +55,148 @@ the remaining fields carry that component's options. There are two common forms:
 A scheme with no options can omit the colon. Escape a literal pipe in an option
 as %7C so it is not treated as a component separator.
 
-The requested Go type also matters. For example, socks5 can produce a StreamDialer,
+Go callers choose the result type with [New]; the Usage section below shows how.
+The type matters: for example, socks5 can produce a StreamDialer,
 PacketDialer, or PacketListener, while tlsfrag produces only a StreamDialer.
 A parser can request dependencies of a different type: h3connect returns a
 StreamDialer but uses a PacketListener for its QUIC transport. Not every sequence
 is valid; each dependency needs a registration for both its scheme and its Go type.
 
-# Composing configurations
+# Built-in components
+
+[NewDefaultRegistry] registers the following config URL schemes. To add them
+to another MutableRegistry without changing its bases, use [RegisterDefaultTypes].
+The sections below describe their options and supported transport types.
+
+# Proxy Protocols
+
+Shadowsocks proxy (stream dialers, packet dialers, and packet listeners; compatible with Outline's access keys; package [golang.getoutline.org/sdk/transport/shadowsocks])
+
+	ss://[USERINFO]@[HOST]:[PORT]?prefix=[PREFIX]
+
+SOCKS5 proxy (stream dialers, packet dialers, and packet listeners; package [golang.getoutline.org/sdk/transport/socks5])
+
+	socks5://[USERINFO]@[HOST]:[PORT]
+
+USERINFO field is optional and only required if username and password authentication is used. It is in the format of username:password.
+
+HTTP CONNECT proxy (streams only, package [golang.getoutline.org/sdk/x/httpconnect])
+
+Three variants are available:
+
+  - httpconnect: HTTP/1.1, or HTTP/2 if negotiated via TLS ALPN. When H2 is negotiated, CONNECT streams are multiplexed over a single TCP connection.
+  - h2connect: Pure HTTP/2. Always multiplexed. Supports h2c (cleartext H2) via plain=true.
+  - h3connect: HTTP/3 over QUIC. Always multiplexed. QUIC runs over the packet listener from the element on its left, which defaults to a new UDP socket.
+
+The sni parameter sets the TLS SNI. The certname parameter sets the name to validate against the server certificate.
+For h2connect, plain=true enables h2c (cleartext HTTP/2 without TLS).
+
+Proxy authentication is supported in two ways:
+
+  - URL userinfo (user:password@host) generates a Proxy-Authorization: Basic header.
+
+  - For other schemes such as Bearer the auth parameter sets the full Proxy-Authorization header value, for example ?auth=Bearer%20TOKEN.
+
+The config formats are shown below. All query parameters are optional; the first
+parameter supplied must start with ?, and subsequent parameters with &.
+
+	httpconnect://[USER:PASS@][HOST]:[PORT][?sni=SNI][&certname=CERTNAME][&auth=TOKEN]
+	h2connect://[USER:PASS@][HOST]:[PORT][?sni=SNI][&certname=CERTNAME][&auth=TOKEN][&plain=true]
+	h3connect://[USER:PASS@][HOST]:[PORT][?sni=SNI][&certname=CERTNAME][&auth=TOKEN]
+
+# Transports
+
+TLS transport (currently streams only, package [golang.getoutline.org/sdk/transport/tls])
+
+The sni parameter defines the name to be sent in the TLS SNI. It can be empty.
+The certname parameter defines what name to validate against the server certificate.
+
+	tls:sni=[SNI]&certname=[CERT_NAME]
+
+WebSockets (stream and packet dialers)
+
+	ws:tcp_path=[PATH]&udp_path=[PATH]
+
+# DNS Protection
+
+DNS resolution (streams only, package [golang.getoutline.org/sdk/dns])
+
+It takes a host:port address. If the port is missing, it will use 53. The resulting dialer will use the input dialer with
+Happy Eyeballs to connect to the destination.
+
+	do53:address=[ADDRESS]
+
+DNS-over-HTTPS resolution (streams only, package [golang.getoutline.org/sdk/dns])
+
+It takes a host name and a host:port address. The name will be used in the SNI and Host header, while the address is used to connect
+to the DoH server. The address is optional, and will default to "[NAME]:443". The resulting dialer will use the input dialer with
+Happy Eyeballs to connect to the destination.
+
+	doh:name=[NAME]&address=[ADDRESS]
+
+Address override (stream and packet dialers).
+
+This dialer configuration is helpful for testing and development or if you need to fix the domain
+resolution.
+The host parameter, if not empty, specifies the host to dial instead of the original host.
+The port parameter, if not empty, specifies the port to dial instead of the original port.
+
+	override:host=[HOST]&port=[PORT]
+
+# Packet manipulation
+
+These strategies manipulate packets to bypass SNI-based blocking.
+
+Stream split transport (streams only, package [golang.getoutline.org/sdk/transport/split])
+
+It takes a list of count*length pairs meaning splitting the sequence in count segments of the given length. If you omit "[COUNT]*", it's assumed to be 1.
+
+	split:[COUNT1]*[LENGTH1],[COUNT2]*[LENGTH2],...
+
+TLS fragmentation (streams only, package [golang.getoutline.org/sdk/transport/tlsfrag]).
+
+A positive LENGTH specifies the number of leading payload bytes in the first
+fragment of the TLS ClientHello record. A negative LENGTH specifies the number
+of trailing payload bytes in the second fragment (using its absolute value).
+A zero LENGTH disables fragmentation.
+For more details, refer to [golang.getoutline.org/sdk/transport/tlsfrag].
+
+	tlsfrag:[LENGTH]
+
+QUIC prelude (packet listeners only, package [golang.getoutline.org/sdk/x/quicprelude])
+
+Sends prelude datagrams before packets that may carry a QUIC ClientHello, using
+the same socket. Other traffic passes unchanged. See [golang.getoutline.org/sdk/x/quicprelude]
+for the mechanism and guidance on choosing a version.
+
+	quicprelude:count=[COUNT]&mode=[MODE]&length=[LENGTH]&version=[VERSION]
+
+All options are optional. By default, one Initial-shaped datagram with a reserved
+version precedes each eligible packet and matches its size.
+
+	count    number of datagrams, at most 16; 0 disables the prelude (default 1)
+	mode     invalid-initial or random (default invalid-initial)
+	length   match, or a byte count (default match)
+	version  reserved, draft, v1, v2, or a 32-bit hex codepoint (default reserved)
+
+Packet reordering (streams only, package [golang.getoutline.org/sdk/x/disorder])
+
+The disorder strategy sends TCP packets out of order by manipulating the
+socket's Time To Live (TTL) or Hop Limit. It temporarily sets the TTL to a low
+value, causing specific packets to be dropped early in the network (like at the
+first router). These dropped packets are then re-transmitted later by the TCP
+stack, resulting in the receiver getting packets out of order. This can help
+bypass network filters that rely on inspecting the initial packets of a TCP
+connection.
+
+	disorder:[PACKET_NUMBER]
+
+PACKET_NUMBER: The number of writes before the disorder action occurs. The
+disorder action triggers when the number of writes equals PACKET_NUMBER. If set
+to 0, the disorder happens on the first write. If set to 1, it happens
+on the second write, and so on.
+
+# Examples
 
 The following strings can be passed to New[transport.StreamDialer]. Replace
 bracketed placeholders with your own values.
@@ -116,6 +228,29 @@ HOST1 is the entry node and HOST3 is the exit node:
 Split the encrypted traffic sent to a Shadowsocks server:
 
 	split:2|ss://[USERINFO]@[HOST]:[PORT]
+
+# Usage
+
+Create a registry with [NewDefaultRegistry], then call [New] with the Go type of
+component you need. For example, this function creates a [transport.StreamDialer]
+that fragments the TLS ClientHello and splits the resulting stream:
+
+	import (
+		"context"
+
+		"golang.getoutline.org/sdk/transport"
+		"golang.getoutline.org/sdk/x/configurl"
+	)
+
+	func newDialer(ctx context.Context) (transport.StreamDialer, error) {
+		registry := configurl.NewDefaultRegistry()
+		return configurl.New[transport.StreamDialer](ctx, registry, "split:2|tlsfrag:1")
+	}
+
+After checking the error, use the returned dialer like any other SDK dialer.
+The registry associates a config URL scheme, such as split, with a [Parser]
+for a particular Go result type. New uses those parsers to construct the
+configured components and their dependencies.
 
 # Defining custom strategies
 
@@ -223,140 +358,6 @@ Lookup helpers in application code: Register checks the signature at compile
 time, and Lookup checks the exact Parser[T] type when retrieving it. Direct
 callers of MutableRegistry.Register must explicitly convert ordinary functions
 to Parser[T]. A registered nil parser disables an entry.
-
-# Built-in components
-
-[NewDefaultRegistry] registers the following config URL schemes. To add them
-to another MutableRegistry without changing its bases, use [RegisterDefaultTypes].
-The sections below describe their options and supported transport types.
-
-# Proxy protocols
-
-Shadowsocks proxy (stream dialers, packet dialers, and packet listeners; compatible with Outline's access keys; package [golang.getoutline.org/sdk/transport/shadowsocks])
-
-	ss://[USERINFO]@[HOST]:[PORT]?prefix=[PREFIX]
-
-SOCKS5 proxy (stream dialers, packet dialers, and packet listeners; package [golang.getoutline.org/sdk/transport/socks5])
-
-	socks5://[USERINFO]@[HOST]:[PORT]
-
-USERINFO field is optional and only required if username and password authentication is used. It is in the format of username:password.
-
-HTTP CONNECT proxy (streams only, package [golang.getoutline.org/sdk/x/httpconnect])
-
-Three variants are available:
-
-  - httpconnect: HTTP/1.1, or HTTP/2 if negotiated via TLS ALPN. When H2 is negotiated, CONNECT streams are multiplexed over a single TCP connection.
-  - h2connect: Pure HTTP/2. Always multiplexed. Supports h2c (cleartext H2) via plain=true.
-  - h3connect: HTTP/3 over QUIC. Always multiplexed. QUIC runs over the packet listener from the element on its left, which defaults to a new UDP socket.
-
-The sni parameter sets the TLS SNI. The certname parameter sets the name to validate against the server certificate.
-For h2connect, plain=true enables h2c (cleartext HTTP/2 without TLS).
-
-Proxy authentication is supported in two ways:
-
-  - URL userinfo (user:password@host) generates a Proxy-Authorization: Basic header.
-
-  - For other schemes such as Bearer the auth parameter sets the full Proxy-Authorization header value, for example ?auth=Bearer%20TOKEN.
-
-The config formats are shown below. All query parameters are optional; the first
-parameter supplied must start with ?, and subsequent parameters with &.
-
-	httpconnect://[USER:PASS@][HOST]:[PORT][?sni=SNI][&certname=CERTNAME][&auth=TOKEN]
-	h2connect://[USER:PASS@][HOST]:[PORT][?sni=SNI][&certname=CERTNAME][&auth=TOKEN][&plain=true]
-	h3connect://[USER:PASS@][HOST]:[PORT][?sni=SNI][&certname=CERTNAME][&auth=TOKEN]
-
-# Transports
-
-TLS transport (currently streams only, package [golang.getoutline.org/sdk/transport/tls])
-
-The sni parameter defines the name to be sent in the TLS SNI. It can be empty.
-The certname parameter defines what name to validate against the server certificate.
-
-	tls:sni=[SNI]&certname=[CERT_NAME]
-
-WebSockets (stream and packet dialers)
-
-	ws:tcp_path=[PATH]&udp_path=[PATH]
-
-# DNS protection
-
-DNS resolution (streams only, package [golang.getoutline.org/sdk/dns])
-
-It takes a host:port address. If the port is missing, it will use 53. The resulting dialer will use the input dialer with
-Happy Eyeballs to connect to the destination.
-
-	do53:address=[ADDRESS]
-
-DNS-over-HTTPS resolution (streams only, package [golang.getoutline.org/sdk/dns])
-
-It takes a host name and a host:port address. The name will be used in the SNI and Host header, while the address is used to connect
-to the DoH server. The address is optional, and will default to "[NAME]:443". The resulting dialer will use the input dialer with
-Happy Eyeballs to connect to the destination.
-
-	doh:name=[NAME]&address=[ADDRESS]
-
-Address override (stream and packet dialers).
-
-This dialer configuration is helpful for testing and development or if you need to fix the domain
-resolution.
-The host parameter, if not empty, specifies the host to dial instead of the original host.
-The port parameter, if not empty, specifies the port to dial instead of the original port.
-
-	override:host=[HOST]&port=[PORT]
-
-# Packet manipulation
-
-These strategies manipulate packets to bypass SNI-based blocking.
-
-Stream split transport (streams only, package [golang.getoutline.org/sdk/transport/split])
-
-It takes a list of count*length pairs meaning splitting the sequence in count segments of the given length. If you omit "[COUNT]*", it's assumed to be 1.
-
-	split:[COUNT1]*[LENGTH1],[COUNT2]*[LENGTH2],...
-
-TLS fragmentation (streams only, package [golang.getoutline.org/sdk/transport/tlsfrag]).
-
-A positive LENGTH specifies the number of leading payload bytes in the first
-fragment of the TLS ClientHello record. A negative LENGTH specifies the number
-of trailing payload bytes in the second fragment (using its absolute value).
-A zero LENGTH disables fragmentation.
-For more details, refer to [golang.getoutline.org/sdk/transport/tlsfrag].
-
-	tlsfrag:[LENGTH]
-
-QUIC prelude (packet listeners only, package [golang.getoutline.org/sdk/x/quicprelude])
-
-Sends prelude datagrams before packets that may carry a QUIC ClientHello, using
-the same socket. Other traffic passes unchanged. See [golang.getoutline.org/sdk/x/quicprelude]
-for the mechanism and guidance on choosing a version.
-
-	quicprelude:count=[COUNT]&mode=[MODE]&length=[LENGTH]&version=[VERSION]
-
-All options are optional. By default, one Initial-shaped datagram with a reserved
-version precedes each eligible packet and matches its size.
-
-	count    number of datagrams, at most 16; 0 disables the prelude (default 1)
-	mode     invalid-initial or random (default invalid-initial)
-	length   match, or a byte count (default match)
-	version  reserved, draft, v1, v2, or a 32-bit hex codepoint (default reserved)
-
-Packet reordering (streams only, package [golang.getoutline.org/sdk/x/disorder])
-
-The disorder strategy sends TCP packets out of order by manipulating the
-socket's Time To Live (TTL) or Hop Limit. It temporarily sets the TTL to a low
-value, causing specific packets to be dropped early in the network (like at the
-first router). These dropped packets are then re-transmitted later by the TCP
-stack, resulting in the receiver getting packets out of order. This can help
-bypass network filters that rely on inspecting the initial packets of a TCP
-connection.
-
-	disorder:[PACKET_NUMBER]
-
-PACKET_NUMBER: The number of writes before the disorder action occurs. The
-disorder action triggers when the number of writes equals PACKET_NUMBER. If set
-to 0, the disorder happens on the first write. If set to 1, it happens
-on the second write, and so on.
 
 [Onion Routing]: https://en.wikipedia.org/wiki/Onion_routing
 */
