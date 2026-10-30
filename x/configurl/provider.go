@@ -16,11 +16,89 @@ package configurl
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"net/url"
 	"strings"
 
 	"golang.getoutline.org/sdk/transport"
 )
+
+// BuildFunc creates an instance of ObjectType for the legacy [TypeRegistry] API.
+// Use [Parser] with the registry API to receive the registry for dependencies.
+// A nil config requests the default base. Forward ctx when constructing dependencies;
+// returned objects should use the context of each later operation rather than retain
+// the construction context.
+type BuildFunc[ObjectType any] func(ctx context.Context, config *Config) (ObjectType, error)
+
+// TypeRegistry registers config types.
+//
+// Deprecated: Use [MutableRegistry] and [Register] instead.
+type TypeRegistry[ObjectType any] interface {
+	// RegisterType registers a factory for the given subtype, replacing any existing one.
+	//
+	// Deprecated: Use [Register] with a [MutableRegistry] instead.
+	RegisterType(subtype string, newInstance BuildFunc[ObjectType])
+}
+
+// ExtensibleProvider creates instances of ObjectType in a way that can be extended via its [TypeRegistry] interface.
+//
+// Deprecated: Use [MutableRegistry] with [Register] and [NewFromConfig] instead.
+type ExtensibleProvider[ObjectType comparable] struct {
+	// Instance to return when config is nil.
+	//
+	// Deprecated: Use [RegisterBase] with a function that returns the base instance.
+	BaseInstance ObjectType
+	builders     map[string]BuildFunc[ObjectType]
+}
+
+var (
+	_ BuildFunc[any]    = (*ExtensibleProvider[any])(nil).NewInstance
+	_ TypeRegistry[any] = (*ExtensibleProvider[any])(nil)
+)
+
+// NewExtensibleProvider creates an [ExtensibleProvider] with the given base instance.
+//
+// Deprecated: Use [NewRegistry] and [RegisterBase] instead.
+func NewExtensibleProvider[ObjectType comparable](baseInstance ObjectType) ExtensibleProvider[ObjectType] {
+	return ExtensibleProvider[ObjectType]{
+		BaseInstance: baseInstance,
+		builders:     make(map[string]BuildFunc[ObjectType]),
+	}
+}
+
+func (p *ExtensibleProvider[ObjectType]) ensureBuildersMap() map[string]BuildFunc[ObjectType] {
+	if p.builders == nil {
+		p.builders = make(map[string]BuildFunc[ObjectType])
+	}
+	return p.builders
+}
+
+// RegisterType implements [TypeRegistry].
+//
+// Deprecated: Use [Register] with a [MutableRegistry] instead.
+func (p *ExtensibleProvider[ObjectType]) RegisterType(subtype string, newInstance BuildFunc[ObjectType]) {
+	p.ensureBuildersMap()[subtype] = newInstance
+}
+
+// NewInstance creates a new instance of ObjectType according to the config.
+//
+// Deprecated: Use [NewFromConfig] with a [Registry] instead.
+func (p *ExtensibleProvider[ObjectType]) NewInstance(ctx context.Context, config *Config) (ObjectType, error) {
+	var zero ObjectType
+	if config == nil {
+		if p.BaseInstance == zero {
+			return zero, errors.New("base instance is not configured")
+		}
+		return p.BaseInstance, nil
+	}
+
+	newInstance, ok := p.ensureBuildersMap()[config.URL.Scheme]
+	if !ok {
+		return zero, fmt.Errorf("config type '%v' is not registered", config.URL.Scheme)
+	}
+	return newInstance(ctx, config)
+}
 
 // ProviderContainer contains providers for the creation of network objects based on a config. The config is
 // extensible by registering providers for different config subtypes.
