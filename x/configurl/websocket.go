@@ -57,7 +57,7 @@ func parseWSConfig(configURL url.URL) (*wsConfig, error) {
 	return &cfg, nil
 }
 
-func newWebsocketStreamDialer(ctx context.Context, registry Registry, config *Config) (transport.StreamDialer, error) {
+func parseWebsocketStreamDialer(ctx context.Context, registry Registry, config *Config) (transport.StreamDialer, error) {
 	sd, err := NewFromConfig[transport.StreamDialer](ctx, registry, config.BaseConfig)
 	if err != nil {
 		return nil, err
@@ -79,7 +79,7 @@ func newWebsocketStreamDialer(ctx context.Context, registry Registry, config *Co
 	}), nil
 }
 
-func newWebsocketPacketDialer(ctx context.Context, registry Registry, config *Config) (transport.PacketDialer, error) {
+func parseWebsocketPacketDialer(ctx context.Context, registry Registry, config *Config) (transport.PacketDialer, error) {
 	sd, err := NewFromConfig[transport.StreamDialer](ctx, registry, config.BaseConfig)
 	if err != nil {
 		return nil, err

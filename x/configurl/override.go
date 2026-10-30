@@ -24,7 +24,7 @@ import (
 	"golang.getoutline.org/sdk/transport"
 )
 
-func newOverrideStreamDialer(ctx context.Context, registry Registry, config *Config) (transport.StreamDialer, error) {
+func parseOverrideStreamDialer(ctx context.Context, registry Registry, config *Config) (transport.StreamDialer, error) {
 	sd, err := NewFromConfig[transport.StreamDialer](ctx, registry, config.BaseConfig)
 	if err != nil {
 		return nil, err
@@ -42,7 +42,7 @@ func newOverrideStreamDialer(ctx context.Context, registry Registry, config *Con
 	}), nil
 }
 
-func newOverridePacketDialer(ctx context.Context, registry Registry, config *Config) (transport.PacketDialer, error) {
+func parseOverridePacketDialer(ctx context.Context, registry Registry, config *Config) (transport.PacketDialer, error) {
 	pd, err := NewFromConfig[transport.PacketDialer](ctx, registry, config.BaseConfig)
 	if err != nil {
 		return nil, err

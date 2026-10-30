@@ -238,27 +238,30 @@ DPI Evasion - To add packet splitting to a Shadowsocks server for enhanced DPI e
 
 A [Registry] looks up parsers by their Go result type and config URL scheme.
 A [MutableRegistry] also supports registration. Use [Register] to add a typed
-[Constructor], [New] to construct an object from a config URL string, or [NewFromConfig]
-to construct it from a parsed [Config]. Constructors receive the registry used for
+[Parser], [New] to construct an object from a config URL string, or [NewFromConfig]
+to construct it from a parsed [Config]. Parsers receive the registry used for
 construction and use it to construct their dependencies. This allows a registry
 wrapper to override dependencies throughout a component chain.
+[ParseConfig] handles the common URL-chain syntax. A component config parser
+interprets its specific options, resolves dependencies, and calls the component's
+constructor.
 
 For example, this component delegates to the configuration on its left:
 
-	func newCustomDialer(ctx context.Context, registry configurl.Registry, config *configurl.Config) (transport.StreamDialer, error) {
+	func parseCustomDialer(ctx context.Context, registry configurl.Registry, config *configurl.Config) (transport.StreamDialer, error) {
 		return configurl.NewFromConfig[transport.StreamDialer](ctx, registry, config.BaseConfig)
 	}
 
 The app creates a registry, registers the component, and constructs a dialer:
 
 	registry := configurl.NewDefaultRegistry()
-	configurl.Register(registry, "custom", newCustomDialer)
+	configurl.Register(registry, "custom", parseCustomDialer)
 	dialer, err := configurl.New[transport.StreamDialer](context.Background(), registry, "custom|tlsfrag:1")
 
-Constructors forward both the context and the supplied registry when calling
+Parsers forward both the context and the supplied registry when calling
 NewFromConfig for dependencies. Do not capture the registration registry instead:
 doing so would bypass wrappers used during construction. NewFromConfig looks up
-the current registration on each call and passes that registry to the constructor.
+the current registration on each call and passes that registry to the parser.
 Returned objects should use the context of each later dial or listen operation,
 rather than retain the construction context.
 
@@ -270,15 +273,15 @@ Use [RegisterBase] for a custom base parser. To reuse an existing dialer, regist
 a parser that returns it.
 
 The registry supports arbitrary Go result types, including interfaces and slices.
-Types are matched exactly: registering a Constructor[transport.StreamDialer] uses
+Types are matched exactly: registering a Parser[transport.StreamDialer] uses
 transport.StreamDialer as the result type.
 [Lookup] retrieves an existing typed parser, for example to wrap its behavior.
 External registries can implement [Registry.Lookup] and
 [MutableRegistry.Register] without exposing their storage. Both methods use
-any to hold Constructor[T] values unchanged. [Register] checks parser signatures at
+any to hold Parser[T] values unchanged. [Register] checks parser signatures at
 compile time. Direct callers of [MutableRegistry.Register] must supply a
-Constructor[T], converting ordinary functions explicitly. Registration checks the function
-signature; [Lookup] checks the exact Constructor[T] type before returning it.
+Parser[T], converting ordinary functions explicitly. Registration checks the function
+signature; [Lookup] checks the exact Parser[T] type before returning it.
 No parser normalization or result conversion is needed. A nil parser disables an entry.
 
 Component libraries can expose Register* helpers accepting a MutableRegistry

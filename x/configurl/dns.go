@@ -27,7 +27,7 @@ import (
 	"golang.org/x/net/dns/dnsmessage"
 )
 
-func newDO53StreamDialer(ctx context.Context, registry Registry, config *Config) (transport.StreamDialer, error) {
+func parseDO53StreamDialer(ctx context.Context, registry Registry, config *Config) (transport.StreamDialer, error) {
 	if config == nil {
 		return nil, fmt.Errorf("emtpy do53 config")
 	}
@@ -46,7 +46,7 @@ func newDO53StreamDialer(ctx context.Context, registry Registry, config *Config)
 	return dns.NewStreamDialer(resolver, sd)
 }
 
-func newDOHStreamDialer(ctx context.Context, registry Registry, config *Config) (transport.StreamDialer, error) {
+func parseDOHStreamDialer(ctx context.Context, registry Registry, config *Config) (transport.StreamDialer, error) {
 	if config == nil {
 		return nil, fmt.Errorf("emtpy doh config")
 	}
