@@ -24,46 +24,40 @@ import (
 	"golang.getoutline.org/sdk/transport"
 )
 
-func registerOverrideStreamDialer(registry MutableRegistry, typeID string) {
-	newInstance := func(ctx context.Context, config *Config) (transport.StreamDialer, error) {
-		sd, err := NewFromConfig[transport.StreamDialer](ctx, registry, config.BaseConfig)
-		if err != nil {
-			return nil, err
-		}
-		override, err := newOverrideFromURL(config.URL)
-		if err != nil {
-			return nil, err
-		}
-		return transport.FuncStreamDialer(func(ctx context.Context, addr string) (transport.StreamConn, error) {
-			addr, err := override(addr)
-			if err != nil {
-				return nil, err
-			}
-			return sd.DialStream(ctx, addr)
-		}), nil
+func newOverrideStreamDialer(ctx context.Context, registry Registry, config *Config) (transport.StreamDialer, error) {
+	sd, err := NewFromConfig[transport.StreamDialer](ctx, registry, config.BaseConfig)
+	if err != nil {
+		return nil, err
 	}
-	Register(registry, typeID, newInstance)
+	override, err := newOverrideFromURL(config.URL)
+	if err != nil {
+		return nil, err
+	}
+	return transport.FuncStreamDialer(func(ctx context.Context, addr string) (transport.StreamConn, error) {
+		addr, err := override(addr)
+		if err != nil {
+			return nil, err
+		}
+		return sd.DialStream(ctx, addr)
+	}), nil
 }
 
-func registerOverridePacketDialer(registry MutableRegistry, typeID string) {
-	newInstance := func(ctx context.Context, config *Config) (transport.PacketDialer, error) {
-		pd, err := NewFromConfig[transport.PacketDialer](ctx, registry, config.BaseConfig)
-		if err != nil {
-			return nil, err
-		}
-		override, err := newOverrideFromURL(config.URL)
-		if err != nil {
-			return nil, err
-		}
-		return transport.FuncPacketDialer(func(ctx context.Context, addr string) (net.Conn, error) {
-			addr, err := override(addr)
-			if err != nil {
-				return nil, err
-			}
-			return pd.DialPacket(ctx, addr)
-		}), nil
+func newOverridePacketDialer(ctx context.Context, registry Registry, config *Config) (transport.PacketDialer, error) {
+	pd, err := NewFromConfig[transport.PacketDialer](ctx, registry, config.BaseConfig)
+	if err != nil {
+		return nil, err
 	}
-	Register(registry, typeID, newInstance)
+	override, err := newOverrideFromURL(config.URL)
+	if err != nil {
+		return nil, err
+	}
+	return transport.FuncPacketDialer(func(ctx context.Context, addr string) (net.Conn, error) {
+		addr, err := override(addr)
+		if err != nil {
+			return nil, err
+		}
+		return pd.DialPacket(ctx, addr)
+	}), nil
 }
 
 func newOverrideFromURL(configURL url.URL) (func(string) (string, error), error) {

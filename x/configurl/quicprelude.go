@@ -25,19 +25,16 @@ import (
 	"golang.getoutline.org/sdk/x/quicprelude"
 )
 
-func registerQUICPreludePacketListener(registry MutableRegistry, typeID string) {
-	newInstance := func(ctx context.Context, config *Config) (transport.PacketListener, error) {
-		inner, err := NewFromConfig[transport.PacketListener](ctx, registry, config.BaseConfig)
-		if err != nil {
-			return nil, err
-		}
-		preludeConfig, err := newQUICPreludeConfigFromURL(config.URL)
-		if err != nil {
-			return nil, err
-		}
-		return preludeConfig.NewPacketListener(inner)
+func newQUICPreludePacketListener(ctx context.Context, registry Registry, config *Config) (transport.PacketListener, error) {
+	inner, err := NewFromConfig[transport.PacketListener](ctx, registry, config.BaseConfig)
+	if err != nil {
+		return nil, err
 	}
-	Register(registry, typeID, newInstance)
+	preludeConfig, err := newQUICPreludeConfigFromURL(config.URL)
+	if err != nil {
+		return nil, err
+	}
+	return preludeConfig.NewPacketListener(inner)
 }
 
 // quicPreludeOptions holds the options as written in the config string, before

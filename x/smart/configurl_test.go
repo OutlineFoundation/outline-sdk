@@ -30,30 +30,35 @@ import (
 	"golang.org/x/net/dns/dnsmessage"
 )
 
-func TestTLSSearchUsesRegistryAndKeepsContextsSeparate(t *testing.T) {
+func TestTLSSearchUsesRegistryAndKeepsBasesSeparate(t *testing.T) {
 	registry := configurl.NewDefaultRegistry()
-	configurl.RegisterBase(registry, func(context.Context, *configurl.Config) (transport.StreamDialer, error) {
+	configurl.RegisterBase(registry, func(context.Context, configurl.Registry, *configurl.Config) (transport.StreamDialer, error) {
 		return namedDialer("fallback"), nil
 	})
-	newInstance := func(ctx context.Context, cfg *configurl.Config) (transport.StreamDialer, error) {
+	newInstance := func(ctx context.Context, registry configurl.Registry, cfg *configurl.Config) (transport.StreamDialer, error) {
 		return configurl.NewFromConfig[transport.StreamDialer](ctx, registry, cfg.BaseConfig)
 	}
 	configurl.Register[transport.StreamDialer](registry, "custom", newInstance)
-	// Independently parsed nested configs must receive the same context base.
-	newNested := func(ctx context.Context, cfg *configurl.Config) (transport.StreamDialer, error) {
+	// Independently parsed nested configs must receive the same registry base.
+	newNested := func(ctx context.Context, registry configurl.Registry, cfg *configurl.Config) (transport.StreamDialer, error) {
 		return configurl.New[transport.StreamDialer](ctx, registry, cfg.URL.Opaque)
 	}
 	configurl.Register(registry, "nested", newNested)
 	opts := NewFinderOptions().SetConfigURLRegistry(registry)
+	sharedFinder, err := opts.New()
+	require.NoError(t, err)
 	var wg sync.WaitGroup
 	for i := range 16 {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			f, err := opts.New() // Concurrent first use prepares the base only once.
+			f, err := opts.New() // Concurrent construction only reads the options and registry.
 			if err != nil {
 				t.Error(err)
 				return
+			}
+			if i%2 == 0 {
+				f = sharedFinder
 			}
 			selected := namedDialer(fmt.Sprintf("selected-%d", i))
 			for _, config := range []string{"", "custom|tlsfrag:1", "custom|override:host=front.invalid|split:1", "nested:tlsfrag:1", "custom|disorder:1"} {
@@ -130,16 +135,16 @@ func (d *countingDNSDialer) DialPacket(ctx context.Context, _ string) (net.Conn,
 
 func TestTLSAttemptsReuseDNSDialerAndCache(t *testing.T) {
 	registry := configurl.NewDefaultRegistry()
-	configurl.RegisterBase(registry, func(context.Context, *configurl.Config) (transport.StreamDialer, error) {
+	configurl.RegisterBase(registry, func(context.Context, configurl.Registry, *configurl.Config) (transport.StreamDialer, error) {
 		return namedDialer("selected"), nil
 	})
 	pd := &countingDNSDialer{}
-	configurl.RegisterBase(registry, func(context.Context, *configurl.Config) (transport.PacketDialer, error) {
+	configurl.RegisterBase(registry, func(context.Context, configurl.Registry, *configurl.Config) (transport.PacketDialer, error) {
 		return pd, nil
 	})
 	var mu sync.Mutex
 	var bases []transport.StreamDialer
-	newInstance := func(ctx context.Context, cfg *configurl.Config) (transport.StreamDialer, error) {
+	newInstance := func(ctx context.Context, registry configurl.Registry, cfg *configurl.Config) (transport.StreamDialer, error) {
 		base, err := configurl.NewFromConfig[transport.StreamDialer](ctx, registry, cfg.BaseConfig)
 		if err != nil {
 			return nil, err
@@ -197,13 +202,13 @@ func TestTLSKeepsPacketBases(t *testing.T) {
 	pd := &countingDNSDialer{}
 	listener := &failingPacketListener{err: listenErr}
 	registry := configurl.NewDefaultRegistry()
-	configurl.RegisterBase(registry, func(context.Context, *configurl.Config) (transport.StreamDialer, error) {
+	configurl.RegisterBase(registry, func(context.Context, configurl.Registry, *configurl.Config) (transport.StreamDialer, error) {
 		return namedDialer("fallback"), nil
 	})
-	configurl.RegisterBase(registry, func(context.Context, *configurl.Config) (transport.PacketDialer, error) {
+	configurl.RegisterBase(registry, func(context.Context, configurl.Registry, *configurl.Config) (transport.PacketDialer, error) {
 		return pd, nil
 	})
-	configurl.RegisterBase(registry, func(context.Context, *configurl.Config) (transport.PacketListener, error) {
+	configurl.RegisterBase(registry, func(context.Context, configurl.Registry, *configurl.Config) (transport.PacketListener, error) {
 		return listener, nil
 	})
 	f, err := NewFinderOptions().SetConfigURLRegistry(registry).New()
@@ -227,12 +232,14 @@ func TestTLSRejectsMalformedConfigs(t *testing.T) {
 	}
 }
 
-func TestContextBaseDelegatesToOriginalParser(t *testing.T) {
+type readOnlyRegistry struct{ configurl.Registry }
+
+func TestTLSRegistryOverrideLeavesOriginalBaseUntouched(t *testing.T) {
 	type traceKey struct{}
 	registry := configurl.NewDefaultRegistry()
 	var originalCalls atomic.Int32
 	originalErr := errors.New("original base error")
-	newOriginal := func(ctx context.Context, cfg *configurl.Config) (transport.StreamDialer, error) {
+	newOriginal := func(ctx context.Context, _ configurl.Registry, cfg *configurl.Config) (transport.StreamDialer, error) {
 		originalCalls.Add(1)
 		if cfg != nil {
 			return nil, errors.New("base received non-nil config")
@@ -243,44 +250,35 @@ func TestContextBaseDelegatesToOriginalParser(t *testing.T) {
 		return nil, originalErr
 	}
 	configurl.RegisterBase(registry, newOriginal)
-	opts := NewFinderOptions().SetConfigURLRegistry(registry)
-	_, err := opts.New()
-	require.NoError(t, err)
+	readOnly := readOnlyRegistry{registry}
+	opts := NewFinderOptions().SetConfigURLRegistry(readOnly)
 	ctx := context.WithValue(context.Background(), traceKey{}, "trace")
-	_, err = configurl.NewFromConfig[transport.StreamDialer](ctx, registry, nil)
-	require.ErrorIs(t, err, originalErr)
-	require.EqualValues(t, 1, originalCalls.Load())
-	selected := namedDialer("selected")
-	newBase := func(ctx context.Context, cfg *configurl.Config) (transport.StreamDialer, error) {
-		require.Equal(t, "trace", ctx.Value(traceKey{}))
-		require.Nil(t, cfg)
-		return selected, nil
+	for i := range 2 {
+		f, err := opts.New()
+		require.NoError(t, err)
+		selected := namedDialer("selected")
+		base, _, err := f.(*finder).findTLS(ctx, nil, selected, []string{""})
+		require.NoError(t, err)
+		_, err = base.DialStream(ctx, "target.invalid:443")
+		require.EqualError(t, err, "selected@target.invalid:443")
+		require.EqualValues(t, i, originalCalls.Load(), "TLS must not invoke the original base")
+		_, err = configurl.NewFromConfig[transport.StreamDialer](ctx, f.(*finder).registry, nil)
+		require.ErrorIs(t, err, originalErr, "the finder retains the original registry")
+		require.EqualValues(t, i+1, originalCalls.Load())
 	}
-	// A repeated New must not wrap the parser again.
-	firstParser, err := configurl.Lookup[transport.StreamDialer](registry, "")
-	require.NoError(t, err)
-	_, err = opts.New()
-	require.NoError(t, err)
-	// Probe via the captured parser too: it must still use per-call contexts.
-	base, err := firstParser(withStreamBaseParser(ctx, newBase), nil)
-	require.NoError(t, err)
-	require.Equal(t, selected, base)
-	require.EqualValues(t, 1, originalCalls.Load(), "TLS must not invoke the original base parser")
-	_, err = configurl.NewFromConfig[transport.StreamDialer](withStreamBaseParser(ctx, nil), registry, nil)
-	require.ErrorIs(t, err, originalErr, "typed-nil overrides fall back to the original parser")
 }
 
 func TestFailedTLSSearchFallsBackToOriginalBase(t *testing.T) {
 	registry := configurl.NewDefaultRegistry()
-	configurl.RegisterBase(registry, func(context.Context, *configurl.Config) (transport.StreamDialer, error) {
+	configurl.RegisterBase(registry, func(context.Context, configurl.Registry, *configurl.Config) (transport.StreamDialer, error) {
 		return namedDialer("original"), nil
 	})
 	pd := &countingDNSDialer{}
-	configurl.RegisterBase(registry, func(context.Context, *configurl.Config) (transport.PacketDialer, error) {
+	configurl.RegisterBase(registry, func(context.Context, configurl.Registry, *configurl.Config) (transport.PacketDialer, error) {
 		return pd, nil
 	})
 	var observed transport.StreamDialer
-	fail := func(ctx context.Context, cfg *configurl.Config) (transport.StreamDialer, error) {
+	fail := func(ctx context.Context, registry configurl.Registry, cfg *configurl.Config) (transport.StreamDialer, error) {
 		var err error
 		observed, err = configurl.NewFromConfig[transport.StreamDialer](ctx, registry, cfg.BaseConfig)
 		if err != nil {

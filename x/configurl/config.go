@@ -28,7 +28,8 @@ type Config struct {
 	BaseConfig *Config
 }
 
-// BuildFunc is a function that creates an instance of ObjectType given a [Config].
+// BuildFunc creates an instance of ObjectType for the legacy [TypeRegistry] API.
+// Use [Constructor] with the registry API to receive the registry for dependencies.
 // A nil config requests the default base. Forward ctx when constructing dependencies;
 // returned objects should use the context of each later operation rather than retain
 // the construction context.

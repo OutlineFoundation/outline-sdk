@@ -24,40 +24,37 @@ import (
 	"golang.getoutline.org/sdk/transport/split"
 )
 
-func registerSplitStreamDialer(registry MutableRegistry, typeID string) {
-	newInstance := func(ctx context.Context, config *Config) (transport.StreamDialer, error) {
-		sd, err := NewFromConfig[transport.StreamDialer](ctx, registry, config.BaseConfig)
-		if err != nil {
-			return nil, err
-		}
-		configText := config.URL.Opaque
-		splits := make([]split.RepeatedSplit, 0)
-		for _, part := range strings.Split(configText, ",") {
-			var count int
-			var bytes int64
-			subparts := strings.Split(strings.TrimSpace(part), "*")
-			switch len(subparts) {
-			case 1:
-				count = 1
-				bytes, err = strconv.ParseInt(subparts[0], 10, 64)
-				if err != nil {
-					return nil, fmt.Errorf("bytes is not a number: %v", subparts[0])
-				}
-			case 2:
-				count, err = strconv.Atoi(subparts[0])
-				if err != nil {
-					return nil, fmt.Errorf("count is not a number: %v", subparts[0])
-				}
-				bytes, err = strconv.ParseInt(subparts[1], 10, 64)
-				if err != nil {
-					return nil, fmt.Errorf("bytes is not a number: %v", subparts[1])
-				}
-			default:
-				return nil, fmt.Errorf("split format must be a comma-separated list of '[$COUNT*]$BYTES' (e.g. '100,5*2'). Got %v", part)
-			}
-			splits = append(splits, split.RepeatedSplit{Count: count, Bytes: bytes})
-		}
-		return split.NewStreamDialer(sd, split.NewRepeatedSplitIterator(splits...))
+func newSplitStreamDialer(ctx context.Context, registry Registry, config *Config) (transport.StreamDialer, error) {
+	sd, err := NewFromConfig[transport.StreamDialer](ctx, registry, config.BaseConfig)
+	if err != nil {
+		return nil, err
 	}
-	Register(registry, typeID, newInstance)
+	configText := config.URL.Opaque
+	splits := make([]split.RepeatedSplit, 0)
+	for _, part := range strings.Split(configText, ",") {
+		var count int
+		var bytes int64
+		subparts := strings.Split(strings.TrimSpace(part), "*")
+		switch len(subparts) {
+		case 1:
+			count = 1
+			bytes, err = strconv.ParseInt(subparts[0], 10, 64)
+			if err != nil {
+				return nil, fmt.Errorf("bytes is not a number: %v", subparts[0])
+			}
+		case 2:
+			count, err = strconv.Atoi(subparts[0])
+			if err != nil {
+				return nil, fmt.Errorf("count is not a number: %v", subparts[0])
+			}
+			bytes, err = strconv.ParseInt(subparts[1], 10, 64)
+			if err != nil {
+				return nil, fmt.Errorf("bytes is not a number: %v", subparts[1])
+			}
+		default:
+			return nil, fmt.Errorf("split format must be a comma-separated list of '[$COUNT*]$BYTES' (e.g. '100,5*2'). Got %v", part)
+		}
+		splits = append(splits, split.RepeatedSplit{Count: count, Bytes: bytes})
+	}
+	return split.NewStreamDialer(sd, split.NewRepeatedSplitIterator(splits...))
 }

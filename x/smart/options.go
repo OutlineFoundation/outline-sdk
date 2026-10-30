@@ -19,7 +19,6 @@ import (
 	"fmt"
 	"io"
 	"maps"
-	"sync"
 	"time"
 
 	"golang.getoutline.org/sdk/x/configurl"
@@ -27,8 +26,8 @@ import (
 
 // FinderOptions configures a [Finder]. Setters collect options;
 // [FinderOptions.New] validates them. Finish all configuration, including
-// registry and fallback registrations, before calling New. Do not copy options
-// after their first New call. Concurrent New calls are supported after setup.
+// registry and fallback registrations, before calling New. Concurrent New calls
+// are supported after setup.
 type FinderOptions struct {
 	// testTimeout is the positive timeout for each connectivity test.
 	testTimeout time.Duration
@@ -37,16 +36,8 @@ type FinderOptions struct {
 	// cache stores successful strategies for later searches; nil disables caching.
 	cache StrategyResultCache
 	// configURLRegistry is shared by the finders created from these options.
-	// If nil, each New call creates and prepares a fresh default registry.
-	configURLRegistry configurl.MutableRegistry
-	// registryMu serializes registry preparation during concurrent New calls.
-	// It does not protect setters, which must finish before New is called.
-	registryMu sync.Mutex
-	// registryPrepared records whether these options have installed the context-aware
-	// default stream parser in configURLRegistry. It prevents repeated New calls from
-	// wrapping the previous wrapper again. New protects it with registryMu;
-	// SetConfigURLRegistry resets it during setup.
-	registryPrepared bool
+	// If nil, each New call creates a fresh default registry.
+	configURLRegistry configurl.Registry
 	// fallbackParsers maps YAML fallback type names to parsers. New copies this map
 	// into each finder so later changes to the options do not affect existing finders.
 	fallbackParsers map[string]FallbackParser
@@ -59,12 +50,10 @@ func NewFinderOptions() *FinderOptions {
 
 // SetConfigURLRegistry shares registry with the finders created by New. A nil
 // registry selects a fresh default registry for each New call. Complete
-// registrations before New. On its first successful call, New wraps the default
-// stream parser to read a TLS-specific base from the construction context.
-// The original parser continues to serve DNS searches and fallbacks.
-func (o *FinderOptions) SetConfigURLRegistry(registry configurl.MutableRegistry) *FinderOptions {
+// registrations before New. Finders only look up constructors in this registry;
+// each TLS search uses a separate wrapper to supply its selected DNS dialer.
+func (o *FinderOptions) SetConfigURLRegistry(registry configurl.Registry) *FinderOptions {
 	o.configURLRegistry = registry
-	o.registryPrepared = false
 	return o
 }
 
@@ -110,19 +99,8 @@ func (o *FinderOptions) New() (Finder, error) {
 		}
 	}
 	registry := o.configURLRegistry
-	// Prepare the stream base to accept a search-specific DNS dialer from the
-	// construction context. This lets TLS strategies share that dialer and its
-	// cache while DNS discovery and fallbacks keep using the registered base.
 	if registry == nil {
 		registry = configurl.NewDefaultRegistry()
-		registerContextStreamBase(registry)
-	} else {
-		o.registryMu.Lock()
-		if !o.registryPrepared {
-			registerContextStreamBase(registry)
-			o.registryPrepared = true
-		}
-		o.registryMu.Unlock()
 	}
 	return &finder{
 		testTimeout:     o.testTimeout,

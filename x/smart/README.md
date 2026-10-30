@@ -172,7 +172,7 @@ Please note that this is a basic example and may need to be adapted for your spe
 
 ## Extending config URLs
 
-Pass a `configurl.MutableRegistry` to `FinderOptions.SetConfigURLRegistry`.
+Pass a `configurl.Registry` to `FinderOptions.SetConfigURLRegistry`.
 For Mobileproxy, use `SmartDialerOptions.ConfigURLRegistry()` to register components
 on the options' registry, or `SetConfigURLRegistry` to supply your own. Component
 libraries can expose `RegisterCustomComponent(opts *mobileproxy.SmartDialerOptions,
@@ -180,19 +180,19 @@ name string)` from a Go wrapper package for mobile bindings.
 
 Use `configurl.Register` for named parsers and `RegisterBase` for a default base
 parser. To reuse an existing dialer, register a parser that returns it.
-Inside a component parser, call
+Component constructors receive `(ctx, registry, config)`. Use that registry when calling
 `configurl.NewFromConfig[transport.StreamDialer](ctx, registry, config.BaseConfig)` to
 construct its dependency. Fallback parsers
 can capture the same registry and call `configurl.New[transport.StreamDialer]`
 for nested config URLs.
 
-Complete registrations before the first `New` or `NewStreamDialer` call. During
-setup, SmartDialer wraps the default stream parser to read a TLS-specific parser
-from the construction context. Each TLS attempt receives the same selected DNS
-dialer and cache, including when a component parses a separate nested config.
+Complete registrations before the first `New` or `NewStreamDialer` call. Each TLS
+search wraps the registry to override the default stream base. Each TLS attempt
+receives the same selected DNS dialer and cache, including when a component parses
+a separate nested config. The shared registry is never modified by the finder.
 DNS discovery and fallbacks use the original base; packet bases are unchanged.
 Config URLs need no extra component or prefix. A component must forward its
-construction context to dependency parsers and use each later operation's context
+construction context and registry to dependencies and use each later operation's context
 when dialing.
 
 ## Adding a new fallback strategy

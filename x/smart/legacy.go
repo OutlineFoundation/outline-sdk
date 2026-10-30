@@ -61,7 +61,7 @@ type StrategyFinder struct {
 func (f *StrategyFinder) initLegacyRegistry() {
 	registry := configurl.NewDefaultRegistry()
 	defaultSD := &transport.TCPDialer{}
-	newStreamDialer := func(context.Context, *configurl.Config) (transport.StreamDialer, error) {
+	newStreamDialer := func(context.Context, configurl.Registry, *configurl.Config) (transport.StreamDialer, error) {
 		if streamDialer := f.StreamDialer; streamDialer != nil {
 			return streamDialer, nil
 		}
@@ -69,16 +69,13 @@ func (f *StrategyFinder) initLegacyRegistry() {
 	}
 	configurl.RegisterBase(registry, newStreamDialer)
 	defaultPD := &transport.UDPDialer{}
-	newPacketDialer := func(context.Context, *configurl.Config) (transport.PacketDialer, error) {
+	newPacketDialer := func(context.Context, configurl.Registry, *configurl.Config) (transport.PacketDialer, error) {
 		if packetDialer := f.PacketDialer; packetDialer != nil {
 			return packetDialer, nil
 		}
 		return defaultPD, nil
 	}
 	configurl.RegisterBase(registry, newPacketDialer)
-	// TLS strategies share the selected DNS dialer through the context override.
-	// DNS discovery and fallbacks continue to read the legacy base constructors.
-	registerContextStreamBase(registry)
 	f.registry = registry
 }
 

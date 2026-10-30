@@ -117,84 +117,75 @@ func sanitizeConnectURL(u url.URL) (string, error) {
 	return u.String(), nil
 }
 
-// registerHTTPConnectStreamDialer registers an HTTP CONNECT proxy transport (H1.1, or H2 via ALPN).
+// newHTTPConnectStreamDialer creates an HTTP CONNECT proxy transport (H1.1, or H2 via ALPN).
 //
 // Config format: httpconnect://[user:pass@]host:port[?sni=SNI][&certname=CERTNAME][&auth=TOKEN]
 //
 // The base dialer (from the previous element in the pipe chain) is used to establish
 // the TCP connection to the proxy. TLS is negotiated by the transport itself.
 // When H2 is negotiated via ALPN, CONNECT streams are multiplexed over the single TCP connection.
-func registerHTTPConnectStreamDialer(registry MutableRegistry, typeID string) {
-	newInstance := func(ctx context.Context, config *Config) (transport.StreamDialer, error) {
-		sd, err := NewFromConfig[transport.StreamDialer](ctx, registry, config.BaseConfig)
-		if err != nil {
-			return nil, err
-		}
-		opts, err := parseConnectOptions(config.URL)
-		if err != nil {
-			return nil, err
-		}
-		tr, err := httpconnect.NewHTTPProxyTransport(sd, config.URL.Host, opts.transport...)
-		if err != nil {
-			return nil, err
-		}
-		return httpconnect.NewConnectClient(tr, opts.client...)
+func newHTTPConnectStreamDialer(ctx context.Context, registry Registry, config *Config) (transport.StreamDialer, error) {
+	sd, err := NewFromConfig[transport.StreamDialer](ctx, registry, config.BaseConfig)
+	if err != nil {
+		return nil, err
 	}
-	Register(registry, typeID, newInstance)
+	opts, err := parseConnectOptions(config.URL)
+	if err != nil {
+		return nil, err
+	}
+	tr, err := httpconnect.NewHTTPProxyTransport(sd, config.URL.Host, opts.transport...)
+	if err != nil {
+		return nil, err
+	}
+	return httpconnect.NewConnectClient(tr, opts.client...)
 }
 
-// registerH2ConnectStreamDialer registers a pure HTTP/2 CONNECT proxy transport.
+// newH2ConnectStreamDialer creates a pure HTTP/2 CONNECT proxy transport.
 //
 // Config format: h2connect://[user:pass@]host:port[?sni=SNI][&certname=CERTNAME][&auth=TOKEN][&plain=true]
 //
 // Unlike httpconnect, all CONNECT streams are multiplexed over a single TCP connection
 // to the proxy. The base dialer is used to establish that connection.
-func registerH2ConnectStreamDialer(registry MutableRegistry, typeID string) {
-	newInstance := func(ctx context.Context, config *Config) (transport.StreamDialer, error) {
-		sd, err := NewFromConfig[transport.StreamDialer](ctx, registry, config.BaseConfig)
-		if err != nil {
-			return nil, err
-		}
-		opts, err := parseConnectOptions(config.URL)
-		if err != nil {
-			return nil, err
-		}
-		tr, err := httpconnect.NewH2ProxyTransport(sd, config.URL.Host, opts.transport...)
-		if err != nil {
-			return nil, err
-		}
-		return httpconnect.NewConnectClient(tr, opts.client...)
+func newH2ConnectStreamDialer(ctx context.Context, registry Registry, config *Config) (transport.StreamDialer, error) {
+	sd, err := NewFromConfig[transport.StreamDialer](ctx, registry, config.BaseConfig)
+	if err != nil {
+		return nil, err
 	}
-	Register(registry, typeID, newInstance)
+	opts, err := parseConnectOptions(config.URL)
+	if err != nil {
+		return nil, err
+	}
+	tr, err := httpconnect.NewH2ProxyTransport(sd, config.URL.Host, opts.transport...)
+	if err != nil {
+		return nil, err
+	}
+	return httpconnect.NewConnectClient(tr, opts.client...)
 }
 
-// registerH3ConnectStreamDialer registers an HTTP/3 CONNECT proxy transport over QUIC.
+// newH3ConnectStreamDialer creates an HTTP/3 CONNECT proxy transport over QUIC.
 //
 // Config format: h3connect://[user:pass@]host:port[?sni=SNI][&certname=CERTNAME][&auth=TOKEN]
 //
 // QUIC runs over a single [net.PacketConn] obtained from the base packet listener (from the
 // previous element in the pipe chain), shared across all CONNECT streams (QUIC multiplexing).
 // With no previous element, the default packet listener creates a new UDP socket.
-func registerH3ConnectStreamDialer(registry MutableRegistry, typeID string) {
-	newInstance := func(ctx context.Context, config *Config) (transport.StreamDialer, error) {
-		pl, err := NewFromConfig[transport.PacketListener](ctx, registry, config.BaseConfig)
-		if err != nil {
-			return nil, err
-		}
-		opts, err := parseConnectOptions(config.URL)
-		if err != nil {
-			return nil, err
-		}
-		conn, err := pl.ListenPacket(ctx)
-		if err != nil {
-			return nil, fmt.Errorf("failed to create packet connection: %w", err)
-		}
-		tr, err := httpconnect.NewH3ProxyTransport(conn, config.URL.Host, opts.transport...)
-		if err != nil {
-			conn.Close()
-			return nil, err
-		}
-		return httpconnect.NewConnectClient(tr, opts.client...)
+func newH3ConnectStreamDialer(ctx context.Context, registry Registry, config *Config) (transport.StreamDialer, error) {
+	pl, err := NewFromConfig[transport.PacketListener](ctx, registry, config.BaseConfig)
+	if err != nil {
+		return nil, err
 	}
-	Register(registry, typeID, newInstance)
+	opts, err := parseConnectOptions(config.URL)
+	if err != nil {
+		return nil, err
+	}
+	conn, err := pl.ListenPacket(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create packet connection: %w", err)
+	}
+	tr, err := httpconnect.NewH3ProxyTransport(conn, config.URL.Host, opts.transport...)
+	if err != nil {
+		conn.Close()
+		return nil, err
+	}
+	return httpconnect.NewConnectClient(tr, opts.client...)
 }

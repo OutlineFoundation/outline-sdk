@@ -21,43 +21,34 @@ import (
 	"golang.getoutline.org/sdk/transport/socks5"
 )
 
-func registerSOCKS5StreamDialer(registry MutableRegistry, typeID string) {
-	newInstance := func(ctx context.Context, config *Config) (transport.StreamDialer, error) {
-		return newSOCKS5Client(ctx, registry, *config)
-	}
-	Register(registry, typeID, newInstance)
+func newSOCKS5StreamDialer(ctx context.Context, registry Registry, config *Config) (transport.StreamDialer, error) {
+	return newSOCKS5Client(ctx, registry, *config)
 }
 
-func registerSOCKS5PacketDialer(registry MutableRegistry, typeID string) {
-	newInstance := func(ctx context.Context, config *Config) (transport.PacketDialer, error) {
-		client, err := newSOCKS5Client(ctx, registry, *config)
-		if err != nil {
-			return nil, err
-		}
-		pd, err := NewFromConfig[transport.PacketDialer](ctx, registry, config.BaseConfig)
-		if err != nil {
-			return nil, err
-		}
-		client.EnablePacket(pd)
-		return transport.PacketListenerDialer{Listener: client}, nil
+func newSOCKS5PacketDialer(ctx context.Context, registry Registry, config *Config) (transport.PacketDialer, error) {
+	client, err := newSOCKS5Client(ctx, registry, *config)
+	if err != nil {
+		return nil, err
 	}
-	Register(registry, typeID, newInstance)
+	pd, err := NewFromConfig[transport.PacketDialer](ctx, registry, config.BaseConfig)
+	if err != nil {
+		return nil, err
+	}
+	client.EnablePacket(pd)
+	return transport.PacketListenerDialer{Listener: client}, nil
 }
 
-func registerSOCKS5PacketListener(registry MutableRegistry, typeID string) {
-	newInstance := func(ctx context.Context, config *Config) (transport.PacketListener, error) {
-		client, err := newSOCKS5Client(ctx, registry, *config)
-		if err != nil {
-			return nil, err
-		}
-		pd, err := NewFromConfig[transport.PacketDialer](ctx, registry, config.BaseConfig)
-		if err != nil {
-			return nil, err
-		}
-		client.EnablePacket(pd)
-		return client, nil
+func newSOCKS5PacketListener(ctx context.Context, registry Registry, config *Config) (transport.PacketListener, error) {
+	client, err := newSOCKS5Client(ctx, registry, *config)
+	if err != nil {
+		return nil, err
 	}
-	Register(registry, typeID, newInstance)
+	pd, err := NewFromConfig[transport.PacketDialer](ctx, registry, config.BaseConfig)
+	if err != nil {
+		return nil, err
+	}
+	client.EnablePacket(pd)
+	return client, nil
 }
 
 func newSOCKS5Client(ctx context.Context, registry Registry, config Config) (*socks5.Client, error) {

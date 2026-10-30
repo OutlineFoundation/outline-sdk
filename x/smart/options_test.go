@@ -107,7 +107,7 @@ func TestFallbackRegistryAndCache(t *testing.T) {
 			registry := configurl.NewDefaultRegistry()
 			configurl.RegisterBase[transport.StreamDialer](registry, nil) // The injected component needs no default base.
 			var builds atomic.Int32
-			newInstance := func(ctx context.Context, cfg *configurl.Config) (transport.StreamDialer, error) {
+			newInstance := func(ctx context.Context, registry configurl.Registry, cfg *configurl.Config) (transport.StreamDialer, error) {
 				if cfg.BaseConfig != nil {
 					return nil, errors.New("unexpected base config in fallback")
 				}

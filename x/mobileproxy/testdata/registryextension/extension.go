@@ -29,7 +29,7 @@ import (
 // A component library can expose this helper from a gomobile wrapper package.
 func RegisterCustomComponent(opts *mobileproxy.SmartDialerOptions, name string) {
 	registry := opts.ConfigURLRegistry()
-	newInstance := func(ctx context.Context, cfg *configurl.Config) (transport.StreamDialer, error) {
+	newInstance := func(ctx context.Context, registry configurl.Registry, cfg *configurl.Config) (transport.StreamDialer, error) {
 		dialStream := func(ctx context.Context, addr string) (transport.StreamConn, error) {
 			if err := ctx.Err(); err != nil {
 				return nil, err

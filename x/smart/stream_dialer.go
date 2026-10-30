@@ -25,6 +25,7 @@ import (
 	"net"
 	"net/http"
 	"net/url"
+	"reflect"
 	"strings"
 	"sync"
 	"time"
@@ -361,37 +362,23 @@ func (f *finder) findDNS(ctx context.Context, testDomains []string, dnsConfig []
 	return resolver.Resolver, &resolver.Config, nil
 }
 
-// streamBaseParserKey identifies a StreamDialer constructor override in a config
-// construction context. It is private so only SmartDialer can set the override.
-type streamBaseParserKey struct{}
-
-// withStreamBaseParser returns a construction context whose default StreamDialer
-// is built by parser through the wrapper installed by registerContextStreamBase.
-// The override applies only to the returned context and its children. A nil parser
-// delegates to the original registered base.
-func withStreamBaseParser(ctx context.Context, parser configurl.BuildFunc[transport.StreamDialer]) context.Context {
-	return context.WithValue(ctx, streamBaseParserKey{}, parser)
+// streamBaseRegistry supplies the selected DNS dialer as the stream base while
+// delegating all other lookups. Constructors receive this registry for their
+// dependencies, so the override also applies inside nested config URLs.
+type streamBaseRegistry struct {
+	configurl.Registry
+	base transport.StreamDialer
 }
 
-// registerContextStreamBase wraps the registry's default StreamDialer constructor
-// so findTLS can use its selected DNS dialer as the base for every TLS strategy.
-// The wrapper uses the constructor supplied by withStreamBaseParser when present;
-// otherwise, DNS discovery and fallback construction use the original base.
-// Install it during setup, after base registrations and before searches begin.
-func registerContextStreamBase(registry configurl.MutableRegistry) {
-	// Capture the original constructor: looking it up after registering the wrapper
-	// would recurse. A TLS override also works when the original base is unavailable.
-	originalBase, originalErr := configurl.Lookup[transport.StreamDialer](registry, "")
-	newBase := func(ctx context.Context, config *configurl.Config) (transport.StreamDialer, error) {
-		if override, ok := ctx.Value(streamBaseParserKey{}).(configurl.BuildFunc[transport.StreamDialer]); ok && override != nil {
-			return override(ctx, config)
+// Lookup implements [configurl.Registry].
+func (r streamBaseRegistry) Lookup(resultType reflect.Type, name string) (any, bool) {
+	if resultType == reflect.TypeFor[transport.StreamDialer]() && name == "" {
+		newInstance := func(context.Context, configurl.Registry, *configurl.Config) (transport.StreamDialer, error) {
+			return r.base, nil
 		}
-		if originalErr != nil {
-			return nil, originalErr
-		}
-		return originalBase(ctx, config)
+		return configurl.Constructor[transport.StreamDialer](newInstance), true
 	}
-	configurl.RegisterBase(registry, newBase)
+	return r.Registry.Lookup(resultType, name)
 }
 
 func (f *finder) findTLS(
@@ -400,15 +387,10 @@ func (f *finder) findTLS(
 	if len(tlsConfig) == 0 {
 		return nil, "", errors.New("config for TLS is empty. Please specify at least one transport")
 	}
-	// All TLS strategies must use the selected DNS resolver. Return the same
-	// prebuilt baseDialer so every attempt shares its DNS cache. The wrapper from
-	// registerContextStreamBase reads this constructor from the context, including
-	// when nested config components request a base. Scoping the override to this
-	// search keeps concurrent searches and later fallbacks on their own bases.
-	newBase := func(context.Context, *configurl.Config) (transport.StreamDialer, error) {
-		return baseDialer, nil
-	}
-	ctx = withStreamBaseParser(ctx, newBase)
+	// Every TLS attempt, including nested components, uses the same DNS dialer
+	// and cache. The wrapper belongs to this search; the original registry stays
+	// unchanged for concurrent searches, DNS discovery, and fallbacks.
+	registry := streamBaseRegistry{Registry: f.registry, base: baseDialer}
 
 	raceCtx, raceDone := context.WithCancel(ctx)
 	defer raceDone()
@@ -418,7 +400,7 @@ func (f *finder) findTLS(
 		Config string
 	}
 	result, err := raceTests(raceCtx, 250*time.Millisecond, tlsConfig, func(index int, transportCfg string) (*SearchResult, error) {
-		tlsDialer, err := configurl.New[transport.StreamDialer](raceCtx, f.registry, transportCfg)
+		tlsDialer, err := configurl.New[transport.StreamDialer](raceCtx, registry, transportCfg)
 		if err != nil {
 			logCtx(raceCtx, "❌ Failed to create tls[%d]: %v, error=%v\n", index, transportCfg, err)
 			return nil, fmt.Errorf("NewStreamDialer failed: %w", err)

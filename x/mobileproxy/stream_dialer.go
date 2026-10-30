@@ -70,8 +70,8 @@ func NewSmartDialerOptions(testDomains *StringList, config string) *SmartDialerO
 
 // ConfigURLRegistry returns the shared registry used for TLS and fallback config
 // URLs. Go component libraries can register types or capture this registry in a
-// fallback parser to parse nested config URLs. The first NewStreamDialer call
-// prepares the default stream parser for TLS search; finish configuring bases first.
+// fallback parser to parse nested config URLs. Component constructors receive the
+// registry to use for their dependencies, including any TLS search overrides.
 // Finish registrations before calling NewStreamDialer; do not change the registry
 // while dialers are being built or used. Use configurl.RegisterBase to configure
 // the default bases before first use; its parser can return an existing dialer.

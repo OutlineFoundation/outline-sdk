@@ -27,44 +27,38 @@ import (
 	"golang.org/x/net/dns/dnsmessage"
 )
 
-func registerDO53StreamDialer(registry MutableRegistry, typeID string) {
-	newInstance := func(ctx context.Context, config *Config) (transport.StreamDialer, error) {
-		if config == nil {
-			return nil, fmt.Errorf("emtpy do53 config")
-		}
-		sd, err := NewFromConfig[transport.StreamDialer](ctx, registry, config.BaseConfig)
-		if err != nil {
-			return nil, err
-		}
-		pd, err := NewFromConfig[transport.PacketDialer](ctx, registry, config.BaseConfig)
-		if err != nil {
-			return nil, err
-		}
-		resolver, err := newDO53Resolver(config.URL, sd, pd)
-		if err != nil {
-			return nil, err
-		}
-		return dns.NewStreamDialer(resolver, sd)
+func newDO53StreamDialer(ctx context.Context, registry Registry, config *Config) (transport.StreamDialer, error) {
+	if config == nil {
+		return nil, fmt.Errorf("emtpy do53 config")
 	}
-	Register(registry, typeID, newInstance)
+	sd, err := NewFromConfig[transport.StreamDialer](ctx, registry, config.BaseConfig)
+	if err != nil {
+		return nil, err
+	}
+	pd, err := NewFromConfig[transport.PacketDialer](ctx, registry, config.BaseConfig)
+	if err != nil {
+		return nil, err
+	}
+	resolver, err := newDO53Resolver(config.URL, sd, pd)
+	if err != nil {
+		return nil, err
+	}
+	return dns.NewStreamDialer(resolver, sd)
 }
 
-func registerDOHStreamDialer(registry MutableRegistry, typeID string) {
-	newInstance := func(ctx context.Context, config *Config) (transport.StreamDialer, error) {
-		if config == nil {
-			return nil, fmt.Errorf("emtpy doh config")
-		}
-		sd, err := NewFromConfig[transport.StreamDialer](ctx, registry, config.BaseConfig)
-		if err != nil {
-			return nil, err
-		}
-		resolver, err := newDOHResolver(config.URL, sd)
-		if err != nil {
-			return nil, err
-		}
-		return dns.NewStreamDialer(resolver, sd)
+func newDOHStreamDialer(ctx context.Context, registry Registry, config *Config) (transport.StreamDialer, error) {
+	if config == nil {
+		return nil, fmt.Errorf("emtpy doh config")
 	}
-	Register(registry, typeID, newInstance)
+	sd, err := NewFromConfig[transport.StreamDialer](ctx, registry, config.BaseConfig)
+	if err != nil {
+		return nil, err
+	}
+	resolver, err := newDOHResolver(config.URL, sd)
+	if err != nil {
+		return nil, err
+	}
+	return dns.NewStreamDialer(resolver, sd)
 }
 
 func newDO53Resolver(config url.URL, sd transport.StreamDialer, pd transport.PacketDialer) (dns.Resolver, error) {
