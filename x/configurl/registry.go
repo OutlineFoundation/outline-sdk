@@ -177,44 +177,6 @@ func NewRegistry() MutableRegistry {
 	return r
 }
 
-// NewDefaultRegistry creates a registry with default bases and built-in parsers.
-func NewDefaultRegistry() MutableRegistry { return RegisterDefaultTypes(NewRegistry()) }
-
-// RegisterDefaultTypes registers the built-in config URL parsers, preserving bases.
-func RegisterDefaultTypes(registry MutableRegistry) MutableRegistry {
-	// Please keep the list in alphabetical order.
-	Register(registry, "disorder", parseDisorderDialer)
-	Register(registry, "do53", parseDO53StreamDialer)
-	Register(registry, "doh", parseDOHStreamDialer)
-
-	Register(registry, "h2connect", parseH2ConnectStreamDialer)
-	Register(registry, "h3connect", parseH3ConnectStreamDialer)
-	Register(registry, "httpconnect", parseHTTPConnectStreamDialer)
-
-	Register(registry, "override", parseOverrideStreamDialer)
-	Register(registry, "override", parseOverridePacketDialer)
-
-	Register(registry, "quicprelude", parseQUICPreludePacketListener)
-
-	Register(registry, "socks5", parseSOCKS5StreamDialer)
-	Register(registry, "socks5", parseSOCKS5PacketDialer)
-	Register(registry, "socks5", parseSOCKS5PacketListener)
-
-	Register(registry, "split", parseSplitStreamDialer)
-
-	Register(registry, "ss", parseShadowsocksStreamDialer)
-	Register(registry, "ss", parseShadowsocksPacketDialer)
-	Register(registry, "ss", parseShadowsocksPacketListener)
-
-	Register(registry, "tls", parseTLSStreamDialer)
-
-	Register(registry, "tlsfrag", parseTLSFragStreamDialer)
-
-	Register(registry, "ws", parseWebsocketStreamDialer)
-	Register(registry, "ws", parseWebsocketPacketDialer)
-	return registry
-}
-
 // validateParser checks the signature without changing or invoking the parser.
 // Lookup verifies the exact Parser[T] type when T is known.
 func validateParser(resultType reflect.Type, parser any) {
