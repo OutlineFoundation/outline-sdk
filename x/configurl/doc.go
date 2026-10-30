@@ -266,57 +266,84 @@ configuration to its left. [NewFromConfig] constructs a dependency from that
 BaseConfig. For the leftmost component, BaseConfig is nil, so NewFromConfig
 invokes the default base parser for the requested type.
 
-The example below registers fragment:<length> using the SDK's existing TLS
-fragmentation component. This duplicates the built-in tlsfrag behavior to show
-how a config parser connects to an ordinary component constructor. In your own
-library, call your component's constructor in the same way.
+For example, a delay component can wait before opening each connection. Its
+constructor accepts a base dialer and a duration, so apps can use it directly
+without config URLs:
+
+	import (
+		"context"
+		"errors"
+		"time"
+
+		"golang.getoutline.org/sdk/transport"
+	)
+
+	// NewDelayDialer waits before opening each connection through base.
+	func NewDelayDialer(base transport.StreamDialer, delay time.Duration) (transport.StreamDialer, error) {
+		if base == nil {
+			return nil, errors.New("delay: base dialer must not be nil")
+		}
+		if delay <= 0 {
+			return nil, errors.New("delay: duration must be positive")
+		}
+		dialStream := func(ctx context.Context, address string) (transport.StreamConn, error) {
+			timer := time.NewTimer(delay)
+			defer timer.Stop()
+			select {
+			case <-ctx.Done():
+				return nil, ctx.Err()
+			case <-timer.C:
+				return base.DialStream(ctx, address)
+			}
+		}
+		return transport.FuncStreamDialer(dialStream), nil
+	}
+
+In a separate file in the same component package, add a parser for
+delay:<duration>, such as delay:100ms, and a registration helper:
 
 	import (
 		"context"
 		"fmt"
-		"strconv"
+		"time"
 
 		"golang.getoutline.org/sdk/transport"
-		"golang.getoutline.org/sdk/transport/tlsfrag"
 		"golang.getoutline.org/sdk/x/configurl"
 	)
 
-	func parseFragmentDialer(ctx context.Context, registry configurl.Registry, config *configurl.Config) (transport.StreamDialer, error) {
-		length, err := strconv.Atoi(config.URL.Opaque)
+	func parseDelayDialer(ctx context.Context, registry configurl.Registry, config *configurl.Config) (transport.StreamDialer, error) {
+		delay, err := time.ParseDuration(config.URL.Opaque)
 		if err != nil {
-			return nil, fmt.Errorf("fragment: invalid length: %w", err)
+			return nil, fmt.Errorf("delay: invalid duration: %w", err)
 		}
 		base, err := configurl.NewFromConfig[transport.StreamDialer](ctx, registry, config.BaseConfig)
 		if err != nil {
 			return nil, err
 		}
-		return tlsfrag.NewFixedLenStreamDialer(base, length)
+		return NewDelayDialer(base, delay)
 	}
 
-	// RegisterFragment registers the fragment parser under name.
-	func RegisterFragment(registry configurl.MutableRegistry, name string) {
-		configurl.Register(registry, name, parseFragmentDialer)
+	// RegisterDelay registers the delay parser under name.
+	func RegisterDelay(registry configurl.MutableRegistry, name string) {
+		configurl.Register(registry, name, parseDelayDialer)
 	}
 
-A component library can publish a Register* helper like this from its own package.
-Apps import the library and call its helper on their registry. Keep direct
-constructors available too, for apps that do not need config URLs. Here,
-[golang.getoutline.org/sdk/transport/tlsfrag.NewFixedLenStreamDialer] is that direct
-constructor.
+A component library can publish both NewDelayDialer and RegisterDelay from its
+own package. Apps import the library and call its registration helper on their
+registry. Assuming the library is imported as components, an app can use:
 
-An app using RegisterFragment can then construct the component:
-
-	func newFragmentDialer(ctx context.Context) (transport.StreamDialer, error) {
+	func newDelayedDialer(ctx context.Context) (transport.StreamDialer, error) {
 		registry := configurl.NewDefaultRegistry()
-		RegisterFragment(registry, "fragment")
-		return configurl.New[transport.StreamDialer](ctx, registry, "split:2|fragment:5")
+		components.RegisterDelay(registry, "delay")
+		return configurl.New[transport.StreamDialer](ctx, registry, "split:2|delay:100ms")
 	}
 
-The fragment parser reads 5 from config.URL.Opaque and asks NewFromConfig to
-construct split:2 as its base. Register infers the result type transport.StreamDialer
-from the parser's signature. Registrations match Go types exactly: a parser returning
-*MyDialer must instead return transport.StreamDialer if it is to be used by
-New[transport.StreamDialer].
+The delay parser reads 100ms from config.URL.Opaque and asks NewFromConfig to
+construct split:2 as its base. Each dial waits 100 milliseconds before calling
+that base; cancellation can end the wait early. Register infers the result type
+transport.StreamDialer from the parser's signature. Registrations match Go types
+exactly: a parser returning *MyDialer must instead return transport.StreamDialer
+if it is to be used by New[transport.StreamDialer].
 
 Always forward the supplied registry and ctx when constructing dependencies.
 The registry used for construction may wrap the one used for registration to
@@ -335,7 +362,7 @@ existing transport.StreamDialer, register a parser that returns it:
 	}
 	configurl.RegisterBase(registry, parseBase)
 
-Now split:2 and split:2|fragment:5 both build on that dialer. Packet bases are
+Now split:2 and split:2|delay:100ms both build on that dialer. Packet bases are
 unchanged because registrations are specific to a Go result type.
 RegisterBase is a convenience for Register with an empty name. A base parser
 receives a nil Config; it can return an existing instance, as above, or create one.
