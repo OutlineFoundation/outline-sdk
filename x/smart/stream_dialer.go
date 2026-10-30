@@ -362,35 +362,26 @@ func (f *finder) findDNS(ctx context.Context, testDomains []string, dnsConfig []
 	return resolver.Resolver, &resolver.Config, nil
 }
 
-// streamBaseRegistry supplies the selected DNS dialer as the stream base while
-// delegating all other lookups. Constructors receive this registry for their
-// dependencies, so the override also applies inside nested config URLs.
-type streamBaseRegistry struct {
-	configurl.Registry
-	base transport.StreamDialer
-}
-
-// Lookup implements [configurl.Registry].
-func (r streamBaseRegistry) Lookup(resultType reflect.Type, name string) (any, bool) {
-	if resultType == reflect.TypeFor[transport.StreamDialer]() && name == "" {
-		newInstance := func(context.Context, configurl.Registry, *configurl.Config) (transport.StreamDialer, error) {
-			return r.base, nil
-		}
-		return configurl.Constructor[transport.StreamDialer](newInstance), true
-	}
-	return r.Registry.Lookup(resultType, name)
-}
-
 func (f *finder) findTLS(
 	ctx context.Context, testDomains []string, baseDialer transport.StreamDialer, tlsConfig []string,
 ) (transport.StreamDialer, string, error) {
 	if len(tlsConfig) == 0 {
 		return nil, "", errors.New("config for TLS is empty. Please specify at least one transport")
 	}
-	// Every TLS attempt, including nested components, uses the same DNS dialer
-	// and cache. The wrapper belongs to this search; the original registry stays
-	// unchanged for concurrent searches, DNS discovery, and fallbacks.
-	registry := streamBaseRegistry{Registry: f.registry, base: baseDialer}
+	// Overlay only the stream base so every TLS attempt, including nested
+	// components, shares the selected DNS dialer and cache. All other entries
+	// come from the original registry, which stays unchanged for other searches.
+	newBase := func(context.Context, configurl.Registry, *configurl.Config) (transport.StreamDialer, error) {
+		return baseDialer, nil
+	}
+	registry := overlayRegistry{
+		top: registryMap{
+			reflect.TypeFor[transport.StreamDialer](): {
+				"": configurl.Constructor[transport.StreamDialer](newBase),
+			},
+		},
+		bottom: f.registry,
+	}
 
 	raceCtx, raceDone := context.WithCancel(ctx)
 	defer raceDone()
