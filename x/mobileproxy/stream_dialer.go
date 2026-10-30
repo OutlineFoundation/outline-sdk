@@ -20,7 +20,6 @@ import (
 	"io"
 	"os"
 	"strings"
-	"time"
 
 	"golang.getoutline.org/sdk/transport"
 	"golang.getoutline.org/sdk/x/configurl"
@@ -46,18 +45,12 @@ func NewStreamDialerFromConfig(transportConfig string) (*StreamDialer, error) {
 
 // SmartDialerOptions specifies the options for creating a "Smart Dialer".
 // A "Smart Dialer" automatically selects the best DNS/TLS strategy to connect to the internet.
+// Create options with NewSmartDialerOptions and finish configuring them before use.
 type SmartDialerOptions struct {
-	testDomains []string
-	config      []byte
-	testTimeout time.Duration
-
-	baseSD transport.StreamDialer
-	basePD transport.PacketDialer
-
-	fallbackParsers map[string]smart.FallbackParser
-
-	logWriter io.Writer
-	cache     *strategyCacheAdapter
+	testDomains   []string
+	config        []byte
+	registry      configurl.MutableRegistry
+	finderOptions *smart.FinderOptions
 }
 
 // NewSmartDialerOptions initializes the required options for creating a "Smart Dialer".
@@ -66,62 +59,69 @@ type SmartDialerOptions struct {
 // `config` defines the strategies to test. For an example, see:
 // https://golang.getoutline.org/sdk/blob/main/x/examples/smart-proxy/config.yaml
 func NewSmartDialerOptions(testDomains *StringList, config string) *SmartDialerOptions {
+	registry := configurl.NewDefaultRegistry()
 	return &SmartDialerOptions{
-		testDomains: testDomains.list,
-		config:      []byte(config),
-		testTimeout: 5 * time.Second,
-		baseSD:      &transport.TCPDialer{},
-		basePD:      &transport.UDPDialer{},
+		testDomains:   testDomains.list,
+		config:        []byte(config),
+		registry:      registry,
+		finderOptions: smart.NewFinderOptions().SetConfigURLRegistry(registry),
 	}
 }
 
-func (opt *SmartDialerOptions) ensureFallbackParsers() map[string]smart.FallbackParser {
-	if opt.fallbackParsers == nil {
-		opt.fallbackParsers = make(map[string]smart.FallbackParser)
+// ConfigURLRegistry returns the shared registry used for TLS and fallback config
+// URLs. Go component libraries can register types or capture this registry in a
+// fallback parser to parse nested config URLs. Component parsers receive the
+// registry to use for their dependencies, including any TLS search overrides.
+// Finish registrations before calling NewStreamDialer; do not change the registry
+// while dialers are being built or used. Use configurl.RegisterBase to configure
+// the default bases before first use; its parser can return an existing dialer.
+//
+// This is a Go API. For mobile bindings, expose a Go helper such as
+// RegisterCustomComponent(opts *SmartDialerOptions, name string) from a bound
+// wrapper package and perform the registration there.
+func (opt *SmartDialerOptions) ConfigURLRegistry() configurl.MutableRegistry {
+	return opt.registry
+}
+
+// SetConfigURLRegistry replaces the registry used for config URLs and DNS bases.
+// A nil registry selects a fresh default registry. This is a Go-only setup API;
+// call it before registering fallback parsers that capture ConfigURLRegistry.
+func (opt *SmartDialerOptions) SetConfigURLRegistry(registry configurl.MutableRegistry) *SmartDialerOptions {
+	if registry == nil {
+		registry = configurl.NewDefaultRegistry()
 	}
-	return opt.fallbackParsers
+	opt.registry = registry
+	opt.finderOptions.SetConfigURLRegistry(registry)
+	return opt
 }
 
 // SetLogWriter configures an optional LogWriter for logging the strategy selection process.
 func (opt *SmartDialerOptions) SetLogWriter(logw LogWriter) {
-	if logw == nil {
-		opt.logWriter = nil
-	} else {
-		opt.logWriter = toWriter(logw)
-	}
+	opt.finderOptions.SetLogWriter(toWriter(logw))
 }
 
 // SetStrategyCache configures an optional StrategyCache to store successful strategies,
 // speeding up NewDialer calls.
 func (opt *SmartDialerOptions) SetStrategyCache(cache StrategyCache) {
 	if cache == nil {
-		opt.cache = nil
+		opt.finderOptions.SetCache(nil)
 	} else {
-		opt.cache = &strategyCacheAdapter{cache}
+		opt.finderOptions.SetCache(&strategyCacheAdapter{cache})
 	}
 }
 
+// RegisterFallbackParser registers a YAML fallback type before searches begin.
+// The parser can capture ConfigURLRegistry to construct nested config URLs.
 func (opt *SmartDialerOptions) RegisterFallbackParser(name string, parser smart.FallbackParser) {
-	opt.ensureFallbackParsers()[name] = parser
+	opt.finderOptions.RegisterFallbackParser(name, parser)
 }
 
 // NewStreamDialer creates a new "Smart" StreamDialer using the configured options.
 // It finds the best-performing DNS/TLS strategy and returns a StreamDialer that uses this strategy.
 func (opt *SmartDialerOptions) NewStreamDialer() (*StreamDialer, error) {
-	// TODO: inject the base dialer for tests.
-	finder := smart.StrategyFinder{
-		LogWriter:    opt.logWriter,
-		TestTimeout:  opt.testTimeout,
-		StreamDialer: opt.baseSD,
-		PacketDialer: opt.basePD,
-	}
-	for name, parser := range opt.ensureFallbackParsers() {
-		finder.RegisterFallbackParser(name, parser)
-	}
-	// When assigning a nil concrete value to an interface, the interface is not nil
-	// but contains a nil value. The `if` check is necessary to avoid a panic.
-	if opt.cache != nil {
-		finder.Cache = opt.cache
+	finder, err := opt.finderOptions.New()
+	if err != nil {
+		return nil, fmt.Errorf("invalid smart dialer options: %w", err)
 	}
 
 	dialer, err := finder.NewDialer(context.Background(), opt.testDomains, opt.config)
