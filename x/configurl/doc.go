@@ -253,6 +253,13 @@ The registry associates a config URL scheme, such as split, with a [Parser]
 for a particular Go result type. New uses those parsers to construct the
 configured components and their dependencies.
 
+If the requested scheme or Go result type is unavailable, or its parser is
+disabled, [New] returns an error matching [errors.ErrUnsupported]. Check it with
+errors.Is(err, errors.ErrUnsupported). The same applies to unavailable dependencies
+and base components. Invalid URL syntax or malformed component options return
+parsing errors instead. Parser and construction errors, including cancellation,
+are propagated unchanged.
+
 # Defining custom strategies
 
 To make a component available through a config URL, provide a [Parser] and

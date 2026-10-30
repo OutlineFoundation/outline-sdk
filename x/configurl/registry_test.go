@@ -17,6 +17,7 @@ package configurl_test
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net"
 	"net/url"
 	"reflect"
@@ -182,6 +183,7 @@ func TestParsersSeeCurrentBaseRegistrations(t *testing.T) {
 	})
 	_, err := configurl.New[transport.StreamDialer](ctx, registry, "concrete")
 	require.ErrorContains(t, err, "is not registered", "result types are matched exactly")
+	require.ErrorIs(t, err, errors.ErrUnsupported)
 	configurl.Register(registry, "interface", func(context.Context, configurl.Registry, *configurl.Config) (transport.StreamDialer, error) {
 		return base, nil
 	})
@@ -200,8 +202,10 @@ func TestRegistryInvalidParsers(t *testing.T) {
 	}
 	_, err := configurl.NewFromConfig[int](ctx, nil, nil)
 	require.ErrorContains(t, err, "nil registry")
+	require.NotErrorIs(t, err, errors.ErrUnsupported)
 	_, err = configurl.NewFromConfig[int](ctx, registry, &configurl.Config{URL: url.URL{Path: "missing-scheme"}})
 	require.ErrorContains(t, err, "no scheme")
+	require.NotErrorIs(t, err, errors.ErrUnsupported)
 	parserErr := errors.New("parser failed")
 	configurl.Register(registry, "error", func(context.Context, configurl.Registry, *configurl.Config) (int, error) { return 0, parserErr })
 	_, err = configurl.New[int](ctx, registry, "error")
@@ -324,6 +328,7 @@ func TestParserNilResults(t *testing.T) {
 	require.Nil(t, parser, "disabled parsers must not become callable wrappers around nil")
 	_, err = configurl.Lookup[transport.StreamDialer](registry, "disabled")
 	require.ErrorContains(t, err, "parser is nil")
+	require.ErrorIs(t, err, errors.ErrUnsupported)
 }
 
 func TestParsersPreserveArgumentsAndResults(t *testing.T) {
@@ -477,6 +482,7 @@ func TestRegisterDisablesEntries(t *testing.T) {
 			registry.Register(reflect.TypeFor[int](), name, candidate)
 			_, err := configurl.Lookup[int](registry, name)
 			require.ErrorContains(t, err, "parser is nil")
+			require.ErrorIs(t, err, errors.ErrUnsupported)
 		})
 	}
 }
@@ -497,8 +503,69 @@ func TestLookupRejectsInvalidExternalParsers(t *testing.T) {
 	for name := range registry[reflect.TypeFor[int]()] {
 		_, err := configurl.Lookup[int](registry, name)
 		require.ErrorContains(t, err, "incompatible parser type")
+		require.NotErrorIs(t, err, errors.ErrUnsupported)
 	}
 	registry.Register(reflect.TypeFor[int](), "disabled", configurl.Parser[int](nil))
 	_, err := configurl.Lookup[int](registry, "disabled")
 	require.ErrorContains(t, err, "parser is nil")
+	require.ErrorIs(t, err, errors.ErrUnsupported)
+}
+
+func TestRegistryConfigErrorClassification(t *testing.T) {
+	registry := configurl.NewDefaultRegistry()
+	configurl.Register[transport.StreamDialer](registry, "disabled", nil)
+	for _, tc := range []struct {
+		name        string
+		config      string
+		unsupported bool
+	}{
+		{"unknown scheme", "unknown", true},
+		{"disabled scheme", "disabled", true},
+		{"nested unknown scheme", "unknown|split:2", true},
+		{"nested disabled scheme", "disabled|split:2", true},
+		{"unsupported dependency type", "tlsfrag:1|h3connect://proxy.example:443", true},
+		{"invalid chain", "split:2||tlsfrag:1", false},
+		{"invalid URL", "socks5://%zz", false},
+		{"invalid options", "split:invalid", false},
+		{"nested invalid options", "split:invalid|tlsfrag:1", false},
+		{"unknown option", "tls:unknown=value", false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := configurl.New[transport.StreamDialer](context.Background(), registry, tc.config)
+			require.Error(t, err)
+			if tc.unsupported {
+				require.ErrorIs(t, err, errors.ErrUnsupported)
+			} else {
+				require.NotErrorIs(t, err, errors.ErrUnsupported)
+			}
+		})
+	}
+	// A scheme registered for streams does not provide a packet implementation.
+	_, err := configurl.New[transport.PacketDialer](context.Background(), registry, "tlsfrag:1")
+	require.ErrorIs(t, err, errors.ErrUnsupported)
+	// A missing base for an arbitrary Go type is unsupported, just like a missing scheme.
+	_, err = configurl.New[int](context.Background(), registry, "")
+	require.ErrorIs(t, err, errors.ErrUnsupported)
+	// Disabling a base prevents construction of components that depend on it.
+	configurl.RegisterBase[transport.StreamDialer](registry, nil)
+	for _, cfg := range []string{"", "split:2"} {
+		_, err := configurl.New[transport.StreamDialer](context.Background(), registry, cfg)
+		require.ErrorIs(t, err, errors.ErrUnsupported)
+	}
+}
+
+func TestRegistryPreservesParserErrorClassification(t *testing.T) {
+	for _, cause := range []error{errors.ErrUnsupported, context.Canceled, errors.New("construction failed")} {
+		t.Run(cause.Error(), func(t *testing.T) {
+			registry := configurl.NewDefaultRegistry()
+			parserErr := fmt.Errorf("custom component: %w", cause)
+			configurl.Register(registry, "custom", func(context.Context, configurl.Registry, *configurl.Config) (transport.StreamDialer, error) {
+				return nil, parserErr
+			})
+			_, err := configurl.New[transport.StreamDialer](context.Background(), registry, "custom|split:2")
+			require.ErrorIs(t, err, cause)
+			require.Same(t, parserErr, err)
+			require.Equal(t, errors.Is(cause, errors.ErrUnsupported), errors.Is(err, errors.ErrUnsupported))
+		})
+	}
 }

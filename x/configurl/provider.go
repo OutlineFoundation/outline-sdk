@@ -82,20 +82,25 @@ func (p *ExtensibleProvider[ObjectType]) RegisterType(subtype string, newInstanc
 }
 
 // NewInstance creates a new instance of ObjectType according to the config.
+// Missing base instances, missing registrations, and nil registered functions
+// return errors wrapping [errors.ErrUnsupported]. Parser errors are returned unchanged.
 //
 // Deprecated: Use [NewFromConfig] with a [Registry] instead.
 func (p *ExtensibleProvider[ObjectType]) NewInstance(ctx context.Context, config *Config) (ObjectType, error) {
 	var zero ObjectType
 	if config == nil {
 		if p.BaseInstance == zero {
-			return zero, errors.New("base instance is not configured")
+			return zero, fmt.Errorf("%.0wbase instance is not configured", errors.ErrUnsupported)
 		}
 		return p.BaseInstance, nil
 	}
 
 	newInstance, ok := p.ensureBuildersMap()[config.URL.Scheme]
 	if !ok {
-		return zero, fmt.Errorf("config type '%v' is not registered", config.URL.Scheme)
+		return zero, fmt.Errorf("%.0wconfig type '%v' is not registered", errors.ErrUnsupported, config.URL.Scheme)
+	}
+	if newInstance == nil {
+		return zero, fmt.Errorf("%.0wconfig type %q parser is nil", errors.ErrUnsupported, config.URL.Scheme)
 	}
 	return newInstance(ctx, config)
 }

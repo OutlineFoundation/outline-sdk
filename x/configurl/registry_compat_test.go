@@ -101,3 +101,23 @@ func TestLegacyPacketDependenciesRemainLive(t *testing.T) {
 	_, err = listener.ListenPacket(context.Background())
 	require.ErrorIs(t, err, base.err)
 }
+
+func TestLegacyConfigErrorClassification(t *testing.T) {
+	ctx := context.Background()
+	providers := configurl.NewDefaultProviders()
+	providers.StreamDialers.RegisterType("disabled", nil)
+	for _, cfg := range []string{"unknown", "disabled", "unknown|split:2", "disabled|split:2"} {
+		_, err := providers.NewStreamDialer(ctx, cfg)
+		require.ErrorIs(t, err, errors.ErrUnsupported, cfg)
+	}
+	for _, cfg := range []string{"split:invalid", "split:invalid|tlsfrag:1", "split:2||tlsfrag:1", "socks5://%zz"} {
+		_, err := providers.NewStreamDialer(ctx, cfg)
+		require.Error(t, err, cfg)
+		require.NotErrorIs(t, err, errors.ErrUnsupported, cfg)
+	}
+	providers.StreamDialers.BaseInstance = nil
+	for _, cfg := range []string{"", "split:2"} {
+		_, err := providers.NewStreamDialer(ctx, cfg)
+		require.ErrorIs(t, err, errors.ErrUnsupported, cfg)
+	}
+}
