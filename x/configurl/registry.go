@@ -35,6 +35,12 @@ type Parser[T any] func(ctx context.Context, registry Registry, config *Config) 
 // Registry looks up parsers by their exact Go result type and config URL scheme.
 // Use [Lookup], [New], or [NewFromConfig] for typed access. Implementations may store
 // parsers however they choose; the interface does not expose storage or base instances.
+//
+// The Lookup and Register methods use any to hold Parser[T] values for
+// different result types without wrapping them. Parser[any] is not a common type
+// for these parsers: Go function signatures require matching result types.
+// Go methods cannot declare their own type parameters, so the generic [Register]
+// and [Lookup] helpers provide typed access instead.
 type Registry interface {
 	// Lookup returns the parser registered for resultType and name, with ok
 	// reporting whether the entry exists. The empty name denotes the default base
