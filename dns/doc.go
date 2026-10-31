@@ -1,4 +1,4 @@
-// Copyright 2023 The Outline Authors
+// Copyright 2024 The Outline Authors
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -31,6 +31,20 @@ to perform DNS resolution over different transports:
   - [DNS-over-HTTPS] (DoH): uses HTTP exchanges for querying the resolver and communicates over a connection encrypted with TLS. It uses
     port 443. That makes the DoH traffic undistinguishable from web traffic, making it harder to block.
 
+# Resolvers and Exchangers
+
+There are two levels at which you can use this package:
+
+  - A [Resolver] takes a question and returns a parsed message. It builds the query for you, picks the
+    message ID, and validates that the response matches. Use it when your code is the one asking.
+  - An [Exchanger] takes and returns messages in [wire format]. Use it when you are relaying messages
+    produced by someone else, such as a stub resolver on the device, and must preserve the query exactly
+    as it was issued: the message ID, header flags and EDNS(0) options all belong to whoever wrote it,
+    and a response that doesn't echo them may be rejected.
+
+Each transport above is available as both, and every [Resolver] in this package is implemented on top of
+the corresponding [Exchanger].
+
 # Establishing Stream Connections
 
 Typically you will want to use custom DNS resolution to establish connections to a destination.
@@ -44,6 +58,7 @@ in parallel, as per the [Happy Eyeballs v2] algorithm.
 [DNS-over-TCP]: https://datatracker.ietf.org/doc/html/rfc7766
 [DNS-over-TLS]: https://datatracker.ietf.org/doc/html/rfc7858
 [DNS-over-HTTPS]: https://datatracker.ietf.org/doc/html/rfc8484
+[wire format]: https://datatracker.ietf.org/doc/html/rfc1035#section-4
 [Happy Eyeballs v2]: https://datatracker.ietf.org/doc/html/rfc8305
 */
 package dns
