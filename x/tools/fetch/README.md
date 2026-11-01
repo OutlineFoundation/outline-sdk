@@ -13,6 +13,13 @@ The tool logs the negotiated QUIC version and wire codepoint after a successful
 HTTP/3 request. Use `1,2` (the default) to prefer v1, or `2,1` to prefer v2
 while allowing fallback through version negotiation.
 
+`-address` can override the destination with either a hostname or an IP; the URL
+still determines TLS SNI and certificate verification.
+
+```console
+fetch -proto h3 -transport 'socks5://127.0.0.1:1080' https://example.com/
+```
+
 ### QUIC preludes
 
 Preludes are configured through `-transport`, not through dedicated flags, so
