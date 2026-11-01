@@ -22,10 +22,10 @@ import (
 	"net"
 	"net/http"
 
-	"golang.getoutline.org/sdk/transport"
-	"golang.getoutline.org/sdk/transport/tls"
 	"github.com/quic-go/quic-go"
 	"github.com/quic-go/quic-go/http3"
+	"golang.getoutline.org/sdk/transport"
+	"golang.getoutline.org/sdk/transport/tls"
 	"golang.org/x/net/http2"
 )
 
@@ -161,6 +161,11 @@ func NewH2ProxyTransport(dialer transport.StreamDialer, proxyAddr string, opts .
 // NewH3ProxyTransport creates an HTTP/3 transport that establishes a QUIC connection to the proxy using the given [net.PacketConn].
 // The proxy address must be in the form "host:port".
 //
+// The transport does not resolve the host. It is passed to conn as the destination of every QUIC
+// datagram, so a hostname is resolved by whoever is behind conn: a SOCKS5 or Shadowsocks packet
+// connection carries it to the proxy, which resolves it. A plain UDP socket such as [net.UDPConn]
+// cannot send to a hostname, and with one the host must be an IP address, or DialStream fails.
+//
 // For HTTP/3 over QUIC over a datagram connection.
 // [tls.WithALPN] has no effect on this transport.
 func NewH3ProxyTransport(conn net.PacketConn, proxyAddr string, opts ...TransportOption) (ProxyRoundTripper, error) {
@@ -186,6 +191,9 @@ func NewH3ProxyTransport(conn net.PacketConn, proxyAddr string, opts ...Transpor
 			if err != nil {
 				return nil, fmt.Errorf("failed to parse proxy address %s: %w", proxyAddr, err)
 			}
+			if err := checkRawConnDestination(conn, parsedProxyAddr); err != nil {
+				return nil, err
+			}
 
 			return quic.DialEarly(ctx, conn, parsedProxyAddr, tlsCfg, quicCfg)
 		},
@@ -196,6 +204,24 @@ func NewH3ProxyTransport(conn net.PacketConn, proxyAddr string, opts ...Transpor
 		RoundTripper: tr,
 		scheme:       schemeHTTPS, // HTTP/3 is always over TLS
 	}, nil
+}
+
+// checkRawConnDestination returns an error if dialing addr over conn would crash.
+//
+// When conn exposes the raw UDP socket (it implements [quic.OOBCapablePacketConn], as [net.UDPConn]
+// does), quic-go sends through its optimized path, which casts the destination to [net.UDPAddr]
+// without checking. For any other address, such as an unresolved hostname, that cast panics on
+// quic-go's send goroutine, where nothing can recover it. Refusing the combination up front turns
+// the crash into an error. Wrapped connections go through [net.PacketConn.WriteTo] and get to
+// decide for themselves what addresses they accept.
+func checkRawConnDestination(conn net.PacketConn, addr net.Addr) error {
+	if _, ok := addr.(*net.UDPAddr); ok {
+		return nil
+	}
+	if _, ok := conn.(quic.OOBCapablePacketConn); ok {
+		return fmt.Errorf("packet connection %T cannot send to %q: use an IP address for the proxy, or a packet listener that accepts domain names", conn, addr.String())
+	}
+	return nil
 }
 
 type transportConfig struct {
