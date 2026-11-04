@@ -18,21 +18,23 @@ import (
 	"context"
 	"io"
 	"net"
+	"time"
 
-	"golang.getoutline.org/sdk/transport"
 	lwip "github.com/eycorsican/go-tun2socks/core"
+	"golang.getoutline.org/sdk/transport"
 )
 
 // Compilation guard against interface implementation
 var _ lwip.TCPConnHandler = (*tcpHandler)(nil)
 
 type tcpHandler struct {
-	dialer transport.StreamDialer
+	dialer           transport.StreamDialer
+	halfCloseTimeout time.Duration
 }
 
 // newTCPHandler returns a Shadowsocks lwIP connection handler.
-func newTCPHandler(client transport.StreamDialer) *tcpHandler {
-	return &tcpHandler{client}
+func newTCPHandler(client transport.StreamDialer, halfCloseTimeout time.Duration) *tcpHandler {
+	return &tcpHandler{dialer: client, halfCloseTimeout: halfCloseTimeout}
 }
 
 func (h *tcpHandler) Handle(conn net.Conn, target *net.TCPAddr) error {
@@ -41,7 +43,7 @@ func (h *tcpHandler) Handle(conn net.Conn, target *net.TCPAddr) error {
 		return err
 	}
 	// TODO: Request upstream to make `conn` a `core.TCPConn` so we can avoid this type assertion.
-	go relay(conn.(lwip.TCPConn), proxyConn)
+	go relay(conn.(lwip.TCPConn), proxyConn, h.halfCloseTimeout)
 	return nil
 }
 
@@ -64,19 +66,25 @@ func copyOneWay(leftConn, rightConn transport.StreamConn) (int64, error) {
 // bytes copied from right to left, from left to right, and any error occurred.
 // Relay allows for half-closed connections: if one side is done writing, it can
 // still read all remaining data from its peer.
-func relay(leftConn, rightConn transport.StreamConn) (int64, int64, error) {
+func relay(leftConn, rightConn transport.StreamConn, timeout time.Duration) (int64, int64, error) {
 	type res struct {
 		N   int64
 		Err error
 	}
 	ch := make(chan res)
+	defer leftConn.Close()
+	defer rightConn.Close()
 
 	go func() {
 		n, err := copyOneWay(rightConn, leftConn)
+		// Bound the remaining right-to-left copy if the peer never sends FIN.
+		rightConn.SetReadDeadline(time.Now().Add(timeout))
 		ch <- res{n, err}
 	}()
 
 	n, err := copyOneWay(leftConn, rightConn)
+	// Bound the remaining left-to-right copy if the peer never sends FIN.
+	leftConn.SetReadDeadline(time.Now().Add(timeout))
 	rs := <-ch
 
 	if err == nil {
