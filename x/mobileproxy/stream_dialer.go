@@ -46,11 +46,14 @@ func NewStreamDialerFromConfig(transportConfig string) (*StreamDialer, error) {
 // SmartDialerOptions specifies the options for creating a "Smart Dialer".
 // A "Smart Dialer" automatically selects the best DNS/TLS strategy to connect to the internet.
 // Create options with NewSmartDialerOptions and finish configuring them before use.
+// The zero value has no test domains or config, but its setters are safe to call.
 type SmartDialerOptions struct {
-	testDomains   []string
-	config        []byte
-	registry      configurl.MutableRegistry
-	finderOptions *smart.FinderOptions
+	testDomains     []string
+	config          []byte
+	registry        configurl.MutableRegistry
+	logWriter       io.Writer
+	cache           smart.StrategyResultCache
+	fallbackParsers map[string]smart.FallbackParser
 }
 
 // NewSmartDialerOptions initializes the required options for creating a "Smart Dialer".
@@ -59,12 +62,10 @@ type SmartDialerOptions struct {
 // `config` defines the strategies to test. For an example, see:
 // https://golang.getoutline.org/sdk/blob/main/x/examples/smart-proxy/config.yaml
 func NewSmartDialerOptions(testDomains *StringList, config string) *SmartDialerOptions {
-	registry := configurl.NewDefaultRegistry()
 	return &SmartDialerOptions{
-		testDomains:   testDomains.list,
-		config:        []byte(config),
-		registry:      registry,
-		finderOptions: smart.NewFinderOptions().SetConfigURLRegistry(registry),
+		testDomains: testDomains.list,
+		config:      []byte(config),
+		registry:    configurl.NewDefaultRegistry(),
 	}
 }
 
@@ -80,6 +81,9 @@ func NewSmartDialerOptions(testDomains *StringList, config string) *SmartDialerO
 // RegisterCustomComponent(opts *SmartDialerOptions, name string) from a bound
 // wrapper package and perform the registration there.
 func (opt *SmartDialerOptions) ConfigURLRegistry() configurl.MutableRegistry {
+	if opt.registry == nil {
+		opt.registry = configurl.NewDefaultRegistry()
+	}
 	return opt.registry
 }
 
@@ -91,35 +95,44 @@ func (opt *SmartDialerOptions) SetConfigURLRegistry(registry configurl.MutableRe
 		registry = configurl.NewDefaultRegistry()
 	}
 	opt.registry = registry
-	opt.finderOptions.SetConfigURLRegistry(registry)
 	return opt
 }
 
 // SetLogWriter configures an optional LogWriter for logging the strategy selection process.
 func (opt *SmartDialerOptions) SetLogWriter(logw LogWriter) {
-	opt.finderOptions.SetLogWriter(toWriter(logw))
+	opt.logWriter = toWriter(logw)
 }
 
 // SetStrategyCache configures an optional StrategyCache to store successful strategies,
 // speeding up NewDialer calls.
 func (opt *SmartDialerOptions) SetStrategyCache(cache StrategyCache) {
 	if cache == nil {
-		opt.finderOptions.SetCache(nil)
+		opt.cache = nil
 	} else {
-		opt.finderOptions.SetCache(&strategyCacheAdapter{cache})
+		opt.cache = &strategyCacheAdapter{cache}
 	}
 }
 
 // RegisterFallbackParser registers a YAML fallback type before searches begin.
 // The parser can capture ConfigURLRegistry to construct nested config URLs.
 func (opt *SmartDialerOptions) RegisterFallbackParser(name string, parser smart.FallbackParser) {
-	opt.finderOptions.RegisterFallbackParser(name, parser)
+	if opt.fallbackParsers == nil {
+		opt.fallbackParsers = make(map[string]smart.FallbackParser)
+	}
+	opt.fallbackParsers[name] = parser
 }
 
 // NewStreamDialer creates a new "Smart" StreamDialer using the configured options.
 // It finds the best-performing DNS/TLS strategy and returns a StreamDialer that uses this strategy.
 func (opt *SmartDialerOptions) NewStreamDialer() (*StreamDialer, error) {
-	finder, err := opt.finderOptions.New()
+	// A nil registry selects a fresh default registry without modifying opt, so
+	// concurrent calls on zero-value options remain read-only.
+	finderOptions := smart.NewFinderOptions().SetConfigURLRegistry(opt.registry).
+		SetLogWriter(opt.logWriter).SetCache(opt.cache)
+	for name, parser := range opt.fallbackParsers {
+		finderOptions.RegisterFallbackParser(name, parser)
+	}
+	finder, err := finderOptions.New()
 	if err != nil {
 		return nil, fmt.Errorf("invalid smart dialer options: %w", err)
 	}

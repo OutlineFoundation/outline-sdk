@@ -76,6 +76,50 @@ func TestSmartDialerRegistriesAreIsolated(t *testing.T) {
 	require.Error(t, err, "per-options registrations must not leak to the static factory")
 }
 
+type mapStrategyCache map[string]string
+
+func (c mapStrategyCache) Get(key string) string        { return c[key] }
+func (c mapStrategyCache) Put(key string, value string) { c[key] = value }
+
+// Go callers can declare SmartDialerOptions without NewSmartDialerOptions, so
+// the zero value must not panic.
+func TestSmartDialerZeroValueOptions(t *testing.T) {
+	t.Run("setters", func(t *testing.T) {
+		opts := &mobileproxy.SmartDialerOptions{}
+		opts.SetLogWriter(mobileproxy.NewStderrLogWriter())
+		opts.SetLogWriter(nil)
+		opts.SetStrategyCache(mapStrategyCache{})
+		opts.SetStrategyCache(nil)
+		registry := opts.ConfigURLRegistry()
+		require.NotNil(t, registry)
+		require.Same(t, registry, opts.ConfigURLRegistry())
+		registryextension.RegisterCustomComponent(opts, "custom")
+		require.Same(t, registry, opts.ConfigURLRegistry())
+		_, err := opts.NewStreamDialer()
+		require.Error(t, err, "zero-value options have no strategy config")
+	})
+	t.Run("registry replacement", func(t *testing.T) {
+		opts := &mobileproxy.SmartDialerOptions{}
+		require.Same(t, opts, opts.SetConfigURLRegistry(nil))
+		require.NotNil(t, opts.ConfigURLRegistry())
+	})
+	t.Run("concurrent dialers", func(t *testing.T) {
+		// NewStreamDialer must not lazily initialize shared state.
+		opts := &mobileproxy.SmartDialerOptions{}
+		var wg sync.WaitGroup
+		for range 8 {
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				if _, err := opts.NewStreamDialer(); err == nil {
+					t.Error("expected an error for zero-value options")
+				}
+			}()
+		}
+		wg.Wait()
+	})
+}
+
 func TestSmartDialerInvalidParser(t *testing.T) {
 	opts := mobileproxy.NewSmartDialerOptions(&mobileproxy.StringList{}, `fallback: [""]`)
 	opts.RegisterFallbackParser("broken", nil)
