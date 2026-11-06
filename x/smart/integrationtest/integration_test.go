@@ -170,7 +170,8 @@ fallback:
 		"🏃 running test: 'ss://Y2hhY2hhMjAtaWV0Zi1wb2x5MTMwNTprSzdEdHQ0MkJLOE9hRjBKYjdpWGFK@1.2.3.4:9999/?outline=1'",
 		"❌ Failed to create fallback[1]:",
 		"failed to start dialer",
-		"🏃 running test: 'socks5://192.168.1.10:1080' (domain: www.example.com.)",
+		// Test domains run in parallel, and the first failure suppresses the others' logs.
+		"🏃 running test: 'socks5://192.168.1.10:1080'",
 	}
 	logContent := logBuffer.String()
 	for _, expectedLog := range expectedLogs {
