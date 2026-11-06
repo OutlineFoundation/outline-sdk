@@ -12,6 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+//lint:file-ignore SA1019 golang.org/x/net/http2 is deprecated in favor of net/http; migrating the HTTP/2 proxy transports is a separate change.
+
 package httpconnect
 
 import (
@@ -366,7 +368,8 @@ func Test_ConnectClient_H3_QUIC(t *testing.T) {
 
 			streamer, ok := w.(http3.HTTPStreamer)
 			require.True(t, ok, "expected http3.HTTPStreamer")
-			stream := streamer.HTTPStream()
+			stream, err := streamer.HTTPStream()
+			require.NoError(t, err, "HTTPStream")
 			defer stream.Close()
 
 			var wg sync.WaitGroup
