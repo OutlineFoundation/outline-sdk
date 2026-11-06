@@ -12,8 +12,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//lint:file-ignore SA1019 golang.org/x/net/http2 is deprecated in favor of net/http; migrating the HTTP/2 proxy transports is a separate change.
-
 package httpconnect
 
 import (
@@ -34,7 +32,6 @@ import (
 	"github.com/stretchr/testify/require"
 	"golang.getoutline.org/sdk/transport"
 	"golang.getoutline.org/sdk/transport/tls"
-	"golang.org/x/net/http2"
 
 	"golang.getoutline.org/sdk/x/httpproxy"
 )
@@ -97,7 +94,6 @@ func verifyTunnel(t *testing.T, dialer transport.StreamDialer) {
 	require.NoError(t, json.NewDecoder(resp.Body).Decode(&got))
 	require.Equal(t, want, got)
 }
-
 
 // Test_ConnectClient_H1_Plain verifies that custom headers (e.g. Proxy-Authorization)
 // are forwarded on every CONNECT request when using a plain HTTP/1.1 proxy.
@@ -261,17 +257,15 @@ func Test_ConnectClient_H2C(t *testing.T) {
 	require.NoError(t, err, "Listen")
 	t.Cleanup(func() { ln.Close() })
 
-	h2srv := &http2.Server{}
-	handler := httpproxy.NewConnectHandler(tcpDialer)
-	go func() {
-		for {
-			conn, err := ln.Accept()
-			if err != nil {
-				return
-			}
-			go h2srv.ServeConn(conn, &http2.ServeConnOpts{Handler: handler})
-		}
-	}()
+	// Only accept HTTP/2 with prior knowledge, so the test fails if the client falls back to HTTP/1.
+	var protocols http.Protocols
+	protocols.SetUnencryptedHTTP2(true)
+	h2srv := &http.Server{
+		Handler:   httpproxy.NewConnectHandler(tcpDialer),
+		Protocols: &protocols,
+	}
+	go func() { _ = h2srv.Serve(ln) }()
+	t.Cleanup(func() { h2srv.Close() })
 
 	tr, err := NewH2ProxyTransport(tcpDialer, ln.Addr().String(), WithPlainHTTP())
 	require.NoError(t, err, "NewH2ProxyTransport")

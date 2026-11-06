@@ -12,8 +12,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//lint:file-ignore SA1019 golang.org/x/net/http2 is deprecated in favor of net/http; migrating the HTTP/2 proxy transports is a separate change.
-
 package configurl_test
 
 import (
@@ -32,7 +30,6 @@ import (
 	"golang.getoutline.org/sdk/transport"
 	"golang.getoutline.org/sdk/x/configurl"
 	"golang.getoutline.org/sdk/x/httpproxy"
-	"golang.org/x/net/http2"
 )
 
 // Test_H2Connect_H2C tests the h2connect configurl type using h2c (cleartext HTTP/2).
@@ -48,17 +45,15 @@ func Test_H2Connect_H2C(t *testing.T) {
 	require.NoError(t, err)
 	t.Cleanup(func() { ln.Close() })
 
-	h2srv := &http2.Server{}
-	handler := httpproxy.NewConnectHandler(tcpDialer)
-	go func() {
-		for {
-			conn, err := ln.Accept()
-			if err != nil {
-				return
-			}
-			go h2srv.ServeConn(conn, &http2.ServeConnOpts{Handler: handler})
-		}
-	}()
+	// Only accept HTTP/2 with prior knowledge, so the test fails if the client falls back to HTTP/1.
+	var protocols http.Protocols
+	protocols.SetUnencryptedHTTP2(true)
+	h2srv := &http.Server{
+		Handler:   httpproxy.NewConnectHandler(tcpDialer),
+		Protocols: &protocols,
+	}
+	go func() { _ = h2srv.Serve(ln) }()
+	t.Cleanup(func() { h2srv.Close() })
 
 	// Build a dialer using the configurl h2connect type.
 	providers := configurl.NewDefaultProviders()

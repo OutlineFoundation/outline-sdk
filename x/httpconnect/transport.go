@@ -12,8 +12,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//lint:file-ignore SA1019 golang.org/x/net/http2 is deprecated in favor of net/http; migrating the HTTP/2 proxy transports is a separate change.
-
 package httpconnect
 
 import (
@@ -23,12 +21,12 @@ import (
 	"fmt"
 	"net"
 	"net/http"
+	"slices"
 
-	"golang.getoutline.org/sdk/transport"
-	"golang.getoutline.org/sdk/transport/tls"
 	"github.com/quic-go/quic-go"
 	"github.com/quic-go/quic-go/http3"
-	"golang.org/x/net/http2"
+	"golang.getoutline.org/sdk/transport"
+	"golang.getoutline.org/sdk/transport/tls"
 )
 
 type TransportOption func(c *transportConfig)
@@ -71,18 +69,14 @@ func NewHTTPProxyTransport(dialer transport.StreamDialer, proxyAddr string, opts
 		opt(host, &tlsCfg)
 	}
 
+	stdCfg := toStdConfig(tlsCfg)
 	tr := &http.Transport{
 		DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
 			return dialer.DialStream(ctx, proxyAddr)
 		},
+		TLSClientConfig: stdCfg,
+		Protocols:       protocolsForALPN(cfg.plainHTTP, stdCfg.NextProtos),
 	}
-	err = http2.ConfigureTransport(tr)
-	if err != nil {
-		return nil, fmt.Errorf("failed to configure http2 transport: %w", err)
-	}
-
-	// TLS config must be applied AFTER http2.ConfigureTransport, as it appends h2 to the list of supported protocols.
-	tr.TLSClientConfig = toStdConfig(tlsCfg)
 
 	sch := schemeHTTPS
 	if cfg.plainHTTP {
@@ -99,7 +93,7 @@ func NewHTTPProxyTransport(dialer transport.StreamDialer, proxyAddr string, opts
 // using the given [transport.StreamDialer].
 // The proxy address must be in the form "host:port".
 //
-// Unlike [NewHTTPProxyTransport], this uses [golang.org/x/net/http2.Transport] directly, enabling:
+// Unlike [NewHTTPProxyTransport], this restricts the [http.Transport] to HTTP/2, enabling:
 //   - h2c (cleartext HTTP/2 via prior knowledge) with [WithPlainHTTP] — no TLS required
 //   - Pure H2 from byte 1: multiple concurrent CONNECT tunnels share one TCP connection
 func NewH2ProxyTransport(dialer transport.StreamDialer, proxyAddr string, opts ...TransportOption) (ProxyRoundTripper, error) {
@@ -114,14 +108,17 @@ func NewH2ProxyTransport(dialer transport.StreamDialer, proxyAddr string, opts .
 	cfg := &transportConfig{}
 	cfg.applyOptions(opts...)
 
-	var tr *http2.Transport
+	var tr *http.Transport
 	if cfg.plainHTTP {
-		tr = &http2.Transport{
-			AllowHTTP: true,
-			// DialTLSContext is used even for plaintext when AllowHTTP is true.
-			DialTLSContext: func(ctx context.Context, _, _ string, _ *stdTLS.Config) (net.Conn, error) {
+		// HTTP/2 with prior knowledge: with HTTP/1 disabled, net/http speaks HTTP/2
+		// from the first byte on the plaintext connection.
+		var protocols http.Protocols
+		protocols.SetUnencryptedHTTP2(true)
+		tr = &http.Transport{
+			DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
 				return dialer.DialStream(ctx, proxyAddr)
 			},
+			Protocols: &protocols,
 		}
 	} else {
 		tlsCfg := tls.ClientConfig{ServerName: host}
@@ -131,10 +128,13 @@ func NewH2ProxyTransport(dialer transport.StreamDialer, proxyAddr string, opts .
 		stdCfg := toStdConfig(tlsCfg)
 		// Ensure "h2" is in ALPN NextProtos so the server negotiates HTTP/2.
 		stdCfg.NextProtos = append([]string{"h2"}, stdCfg.NextProtos...)
-		tr = &http2.Transport{
-			// http2.Transport type-asserts to *tls.Conn to read NegotiatedProtocol,
-			// so we must return *stdTLS.Conn directly — not an sdk tls.WrapConn wrapper.
-			DialTLSContext: func(ctx context.Context, _, _ string, _ *stdTLS.Config) (net.Conn, error) {
+		var protocols http.Protocols
+		protocols.SetHTTP2(true)
+		tr = &http.Transport{
+			// net/http reads the negotiated protocol from the connection state and
+			// hands the connection to its HTTP/2 implementation, so we must return
+			// *stdTLS.Conn directly — not an sdk tls.WrapConn wrapper.
+			DialTLSContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
 				conn, err := dialer.DialStream(ctx, proxyAddr)
 				if err != nil {
 					return nil, err
@@ -144,8 +144,13 @@ func NewH2ProxyTransport(dialer transport.StreamDialer, proxyAddr string, opts .
 					conn.Close()
 					return nil, err
 				}
+				if p := tlsConn.ConnectionState().NegotiatedProtocol; p != "h2" {
+					tlsConn.Close()
+					return nil, fmt.Errorf("proxy did not negotiate HTTP/2 (ALPN protocol %q)", p)
+				}
 				return tlsConn, nil
 			},
+			Protocols: &protocols,
 		}
 	}
 
@@ -155,7 +160,7 @@ func NewH2ProxyTransport(dialer transport.StreamDialer, proxyAddr string, opts .
 	}
 
 	return proxyRT{
-		RoundTripper: tr,
+		RoundTripper: newH2ConnPool(tr, sch, proxyAddr),
 		scheme:       sch,
 	}, nil
 }
@@ -198,6 +203,22 @@ func NewH3ProxyTransport(conn net.PacketConn, proxyAddr string, opts ...Transpor
 		RoundTripper: tr,
 		scheme:       schemeHTTPS, // HTTP/3 is always over TLS
 	}, nil
+}
+
+// protocolsForALPN returns the protocols for [NewHTTPProxyTransport] so that the
+// ALPN protocols offered are exactly the ones the caller configured: HTTP/2 is
+// only used when "h2" is offered, and HTTP/1 is disabled only when "h2" is
+// offered without "http/1.1", which enforces HTTP/2.
+func protocolsForALPN(plainHTTP bool, nextProtos []string) *http.Protocols {
+	var p http.Protocols
+	if plainHTTP {
+		p.SetHTTP1(true)
+		return &p
+	}
+	h2 := slices.Contains(nextProtos, "h2")
+	p.SetHTTP2(h2)
+	p.SetHTTP1(!h2 || slices.Contains(nextProtos, "http/1.1"))
+	return &p
 }
 
 type transportConfig struct {
