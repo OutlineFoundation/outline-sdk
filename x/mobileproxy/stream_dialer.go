@@ -127,12 +127,12 @@ func (opt *SmartDialerOptions) RegisterFallbackParser(name string, parser smart.
 func (opt *SmartDialerOptions) NewStreamDialer() (*StreamDialer, error) {
 	// A nil registry selects a fresh default registry without modifying opt, so
 	// concurrent calls on zero-value options remain read-only.
-	finderOptions := smart.NewFinderOptions().SetConfigURLRegistry(opt.registry).
+	finderConfig := smart.NewFinderConfig().SetConfigURLRegistry(opt.registry).
 		SetLogWriter(opt.logWriter).SetCache(opt.cache)
 	for name, parser := range opt.fallbackParsers {
-		finderOptions.RegisterFallbackParser(name, parser)
+		finderConfig.RegisterFallbackParser(name, parser)
 	}
-	finder, err := finderOptions.New()
+	finder, err := finderConfig.New()
 	if err != nil {
 		return nil, fmt.Errorf("invalid smart dialer options: %w", err)
 	}

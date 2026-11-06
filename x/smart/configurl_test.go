@@ -44,15 +44,15 @@ func TestTLSSearchUsesRegistryAndKeepsBasesSeparate(t *testing.T) {
 		return configurl.New[transport.StreamDialer](ctx, registry, cfg.URL.Opaque)
 	}
 	configurl.Register(registry, "nested", parseNested)
-	opts := NewFinderOptions().SetConfigURLRegistry(registry)
-	sharedFinder, err := opts.New()
+	finderConfig := NewFinderConfig().SetConfigURLRegistry(registry)
+	sharedFinder, err := finderConfig.New()
 	require.NoError(t, err)
 	var wg sync.WaitGroup
 	for i := range 16 {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			f, err := opts.New() // Concurrent construction only reads the options and registry.
+			f, err := finderConfig.New() // Concurrent construction only reads the config and registry.
 			if err != nil {
 				t.Error(err)
 				return
@@ -165,7 +165,7 @@ func TestTLSAttemptsReuseDNSDialerAndCache(t *testing.T) {
 	}
 	configurl.Register[transport.StreamDialer](registry, "probe", parse)
 	cache := &memoryStrategyCache{}
-	f, err := NewFinderOptions().SetConfigURLRegistry(registry).SetCache(cache).New()
+	f, err := NewFinderConfig().SetConfigURLRegistry(registry).SetCache(cache).New()
 	require.NoError(t, err)
 	dialer, err := f.NewDialer(context.Background(), nil, []byte(`
 dns: [{udp: {address: resolver.invalid}}]
@@ -211,7 +211,7 @@ func TestTLSKeepsPacketBases(t *testing.T) {
 	configurl.RegisterBase(registry, func(context.Context, configurl.Registry, *configurl.Config) (transport.PacketListener, error) {
 		return listener, nil
 	})
-	f, err := NewFinderOptions().SetConfigURLRegistry(registry).New()
+	f, err := NewFinderConfig().SetConfigURLRegistry(registry).New()
 	require.NoError(t, err)
 	dialer, _, err := f.(*finder).findTLS(context.Background(), nil, namedDialer("selected"), []string{"do53:address=192.0.2.53"})
 	require.NoError(t, err)
@@ -224,7 +224,7 @@ func TestTLSKeepsPacketBases(t *testing.T) {
 }
 
 func TestTLSRejectsMalformedConfigs(t *testing.T) {
-	f, err := NewFinderOptions().New()
+	f, err := NewFinderConfig().New()
 	require.NoError(t, err)
 	for _, config := range []string{"|tlsfrag:1", "tlsfrag:1|", "split:1||tlsfrag:1"} {
 		_, _, err := f.(*finder).findTLS(context.Background(), nil, namedDialer("selected"), []string{config})
@@ -251,10 +251,10 @@ func TestTLSRegistryOverrideLeavesOriginalBaseUntouched(t *testing.T) {
 	}
 	configurl.RegisterBase(registry, parseOriginal)
 	readOnly := readOnlyRegistry{registry}
-	opts := NewFinderOptions().SetConfigURLRegistry(readOnly)
+	finderConfig := NewFinderConfig().SetConfigURLRegistry(readOnly)
 	ctx := context.WithValue(context.Background(), traceKey{}, "trace")
 	for i := range 2 {
-		f, err := opts.New()
+		f, err := finderConfig.New()
 		require.NoError(t, err)
 		selected := namedDialer("selected")
 		base, _, err := f.(*finder).findTLS(ctx, nil, selected, []string{""})
@@ -291,7 +291,7 @@ func TestFailedTLSSearchFallsBackToOriginalBase(t *testing.T) {
 		base, err := configurl.NewFromConfig[transport.StreamDialer](ctx, registry, nil)
 		return base, "nested", err
 	}
-	f, err := NewFinderOptions().SetConfigURLRegistry(registry).
+	f, err := NewFinderConfig().SetConfigURLRegistry(registry).
 		RegisterFallbackParser("nested", fallback).New()
 	require.NoError(t, err)
 	dialer, err := f.NewDialer(context.Background(), nil, []byte(`

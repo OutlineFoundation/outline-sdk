@@ -29,7 +29,7 @@ import (
 // Do not change its fields or fallback registrations while NewDialer is running,
 // or copy it after its first use.
 //
-// Deprecated: Use [NewFinderOptions] to create a [Finder] instead.
+// Deprecated: Use [NewFinderConfig] to create a [Finder] instead.
 type StrategyFinder struct {
 	// TestTimeout is the timeout for each connectivity test.
 	TestTimeout time.Duration
@@ -41,12 +41,12 @@ type StrategyFinder struct {
 	// StreamDialer is the stream base. Nil uses a [transport.TCPDialer].
 	//
 	// Deprecated: Use configurl.RegisterBase[transport.StreamDialer] on the registry
-	// passed to FinderOptions.SetConfigURLRegistry instead.
+	// passed to FinderConfig.SetConfigURLRegistry instead.
 	StreamDialer transport.StreamDialer
 	// PacketDialer is the packet base. Nil uses a [transport.UDPDialer].
 	//
 	// Deprecated: Use configurl.RegisterBase[transport.PacketDialer] on the registry
-	// passed to FinderOptions.SetConfigURLRegistry instead.
+	// passed to FinderConfig.SetConfigURLRegistry instead.
 	PacketDialer transport.PacketDialer
 
 	// registryOnce initializes the legacy base parsers before concurrent searches.
@@ -96,8 +96,8 @@ func (f *StrategyFinder) NewDialer(ctx context.Context, testDomains []string, co
 	// Snapshot the timeout, log writer, cache, and fallback registrations for this
 	// search. The registry's base parsers read StreamDialer and PacketDialer live
 	// whenever a base is constructed, so those fields must not change during the
-	// search. Do not apply the new options validation here: legacy callers may use
-	// zero-valued options.
+	// search. Do not apply FinderConfig validation here: legacy callers may use
+	// zero-valued fields.
 	delegate := &finder{
 		registry:        f.registry,
 		testTimeout:     f.TestTimeout,

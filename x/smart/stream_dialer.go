@@ -47,7 +47,7 @@ type YAMLNode any
 type FallbackParser func(context.Context, YAMLNode) (dialer transport.StreamDialer, configSignature string, err error)
 
 // Finder searches for a working connection strategy and constructs its dialer.
-// Use [NewFinderOptions] to configure a finder. A finder supports concurrent
+// Use [NewFinderConfig] to configure a finder. A finder supports concurrent
 // searches; its configured registry, cache, and log writer must support that use.
 type Finder interface {
 	// NewDialer searches the YAML config for a DNS/TLS or fallback strategy that
@@ -58,7 +58,7 @@ type Finder interface {
 	NewDialer(ctx context.Context, testDomains []string, config []byte) (transport.StreamDialer, error)
 }
 
-// finder holds the configuration prepared by FinderOptions.New. All search state
+// finder holds the configuration prepared by FinderConfig.New. All search state
 // is local to NewDialer; the registry, cache, and log writer are shared.
 type finder struct {
 	registry        configurl.Registry

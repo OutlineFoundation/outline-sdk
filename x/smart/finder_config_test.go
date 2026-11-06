@@ -38,29 +38,29 @@ func (d namedDialer) DialStream(ctx context.Context, addr string) (transport.Str
 	return nil, fmt.Errorf("%s@%s", d, addr)
 }
 
-func TestFinderOptions(t *testing.T) {
+func TestFinderConfig(t *testing.T) {
 	registry := configurl.NewDefaultRegistry()
 	var logs bytes.Buffer
 	parser := func(context.Context, YAMLNode) (transport.StreamDialer, string, error) {
 		return namedDialer("custom"), "custom", nil
 	}
-	opts := NewFinderOptions()
-	require.Same(t, opts, opts.SetTestTimeout(0).SetLogWriter(&logs).SetCache(nil).
+	finderConfig := NewFinderConfig()
+	require.Same(t, finderConfig, finderConfig.SetTestTimeout(0).SetLogWriter(&logs).SetCache(nil).
 		SetConfigURLRegistry(registry).RegisterFallbackParser("custom", nil))
-	_, err := opts.New()
+	_, err := finderConfig.New()
 	require.ErrorContains(t, err, "timeout must be positive")
-	opts.SetTestTimeout(time.Second)
-	_, err = opts.New()
+	finderConfig.SetTestTimeout(time.Second)
+	_, err = finderConfig.New()
 	require.ErrorContains(t, err, `fallback parser "custom" must not be nil`)
-	result, err := opts.RegisterFallbackParser("custom", parser).New()
+	result, err := finderConfig.RegisterFallbackParser("custom", parser).New()
 	require.NoError(t, err)
 	f := result.(*finder)
 	require.Same(t, registry, f.registry)
 	require.Same(t, &logs, f.logWriter)
 	require.Equal(t, time.Second, f.testTimeout)
 
-	// Scalar options and the parser map are snapshots, not live builder state.
-	opts.SetTestTimeout(2*time.Second).SetLogWriter(nil).RegisterFallbackParser("custom", nil)
+	// Scalar settings and the parser map are snapshots, not live config state.
+	finderConfig.SetTestTimeout(2*time.Second).SetLogWriter(nil).RegisterFallbackParser("custom", nil)
 	dialer, _, err := f.makeDialerFromConfig(context.Background(), map[string]any{"custom": ""})
 	require.NoError(t, err)
 	require.Equal(t, namedDialer("custom"), dialer)
@@ -68,11 +68,11 @@ func TestFinderOptions(t *testing.T) {
 	require.Same(t, &logs, f.logWriter)
 }
 
-func TestFinderOptionsDefaultRegistries(t *testing.T) {
-	opts := NewFinderOptions().SetConfigURLRegistry(nil)
-	first, err := opts.New()
+func TestFinderConfigDefaultRegistries(t *testing.T) {
+	finderConfig := NewFinderConfig().SetConfigURLRegistry(nil)
+	first, err := finderConfig.New()
 	require.NoError(t, err)
-	second, err := opts.New()
+	second, err := finderConfig.New()
 	require.NoError(t, err)
 	require.NotSame(t, first.(*finder).registry, second.(*finder).registry)
 	require.Equal(t, 5*time.Second, first.(*finder).testTimeout)
@@ -125,7 +125,7 @@ func TestFallbackRegistryAndCache(t *testing.T) {
 			}
 			cache := &memoryStrategyCache{}
 			var logs bytes.Buffer
-			finder, err := NewFinderOptions().SetConfigURLRegistry(registry).
+			finder, err := NewFinderConfig().SetConfigURLRegistry(registry).
 				RegisterFallbackParser("nested", parser).SetCache(cache).SetLogWriter(&logs).New()
 			require.NoError(t, err)
 			for range 2 {
@@ -146,7 +146,7 @@ func TestDNSMissingRegistryBases(t *testing.T) {
 	registry := configurl.NewDefaultRegistry()
 	configurl.RegisterBase[transport.StreamDialer](registry, nil)
 	configurl.RegisterBase[transport.PacketDialer](registry, nil)
-	finder, err := NewFinderOptions().SetConfigURLRegistry(registry).New()
+	finder, err := NewFinderConfig().SetConfigURLRegistry(registry).New()
 	require.NoError(t, err)
 	for _, config := range []string{
 		`dns: [{udp: {address: resolver.invalid}}]`,
@@ -165,7 +165,7 @@ func TestDNSUnsupportedErrorIncludesCauses(t *testing.T) {
 	registry := configurl.NewDefaultRegistry()
 	configurl.RegisterBase[transport.StreamDialer](registry, nil)
 	configurl.RegisterBase[transport.PacketDialer](registry, nil)
-	finder, err := NewFinderOptions().SetConfigURLRegistry(registry).New()
+	finder, err := NewFinderConfig().SetConfigURLRegistry(registry).New()
 	require.NoError(t, err)
 
 	// Logging is disabled, so the returned error must explain why each entry was skipped.
@@ -181,7 +181,7 @@ func TestDNSValidatesEntriesBeforeBases(t *testing.T) {
 	registry := configurl.NewDefaultRegistry()
 	configurl.RegisterBase[transport.StreamDialer](registry, nil)
 	configurl.RegisterBase[transport.PacketDialer](registry, nil)
-	finder, err := NewFinderOptions().SetConfigURLRegistry(registry).New()
+	finder, err := NewFinderConfig().SetConfigURLRegistry(registry).New()
 	require.NoError(t, err)
 	for config, message := range map[string]string{
 		`dns: [{https: {name: ""}}]`:  "https entry has empty server name",
@@ -207,7 +207,7 @@ func TestDNSSkipsUnsupportedRegistryBases(t *testing.T) {
 			registry := configurl.NewDefaultRegistry()
 			configurl.RegisterBase[transport.PacketDialer](registry, nil)
 			var logs bytes.Buffer
-			finder, err := NewFinderOptions().SetConfigURLRegistry(registry).SetLogWriter(&logs).New()
+			finder, err := NewFinderConfig().SetConfigURLRegistry(registry).SetLogWriter(&logs).New()
 			require.NoError(t, err)
 
 			// No test domains are needed to verify candidate selection without network access.
@@ -254,7 +254,7 @@ func TestDNSPreservesEntryErrors(t *testing.T) {
 					return nil, tt.baseError
 				})
 			}
-			finder, err := NewFinderOptions().SetConfigURLRegistry(registry).New()
+			finder, err := NewFinderConfig().SetConfigURLRegistry(registry).New()
 			require.NoError(t, err)
 			dialer, err := finder.NewDialer(context.Background(), nil, []byte(tt.config))
 			require.ErrorContains(t, err, tt.message)

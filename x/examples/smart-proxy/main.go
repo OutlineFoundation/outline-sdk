@@ -82,7 +82,7 @@ func main() {
 		log.Fatal("Must specify flag --config")
 	}
 
-	finderConfig, err := os.ReadFile(*configFlag)
+	strategyConfig, err := os.ReadFile(*configFlag)
 	if err != nil {
 		log.Fatalf("Could not read config: %v", err)
 	}
@@ -120,16 +120,16 @@ func main() {
 		return packetDialer, nil
 	}
 	configurl.RegisterBase(registry, parsePacketDialer)
-	opts := smart.NewFinderOptions().
+	finderConfig := smart.NewFinderConfig().
 		SetConfigURLRegistry(registry).
 		SetLogWriter(debugLog.Writer()).
 		SetTestTimeout(5 * time.Second)
 	if len(*cacheFlag) > 0 {
 		if cache, err := NewJSONFileCache(*cacheFlag); err == nil {
-			opts.SetCache(cache)
+			finderConfig.SetCache(cache)
 		}
 	}
-	finder, err := opts.New()
+	finder, err := finderConfig.New()
 	if err != nil {
 		log.Fatalf("Could not create strategy finder: %v", err)
 	}
@@ -139,7 +139,7 @@ func main() {
 	findCtx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
 
-	dialer, err := finder.NewDialer(findCtx, domainsFlag, finderConfig)
+	dialer, err := finder.NewDialer(findCtx, domainsFlag, strategyConfig)
 	if err != nil {
 		log.Fatalf("Failed to find dialer: %v", err)
 	}

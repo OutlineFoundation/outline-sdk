@@ -127,21 +127,21 @@ fallback:
 
 ### Using the Smart Dialer
 
-To use the Smart Dialer, create a `Finder` with `NewFinderOptions().New()` and call the `NewDialer` method, passing in the list of test domains and the YAML config. The `NewDialer` method will return a `transport.StreamDialer` that can be used to create connections using the found strategy.
+To use the Smart Dialer, create a `Finder` with `NewFinderConfig().New()` and call the `NewDialer` method, passing in the list of test domains and the YAML config. The `NewDialer` method will return a `transport.StreamDialer` that can be used to create connections using the found strategy.
 
 `Finder` is an interface with a private implementation. Configure the registry,
-fallback parsers, and other options before calling `New()`. The deprecated
+fallback parsers, and other settings before calling `New()`. The deprecated
 `StrategyFinder` struct delegates to the same implementation for existing callers.
 
 For example:
 
 ```go
-finder, err := smart.NewFinderOptions().
+finder, err := smart.NewFinderConfig().
 	SetTestTimeout(5 * time.Second).
 	SetLogWriter(os.Stdout).
 	New()
 if err != nil {
-	// Handle invalid options.
+	// Handle an invalid config.
 	return
 }
 
@@ -172,7 +172,7 @@ Please note that this is a basic example and may need to be adapted for your spe
 
 ## Extending config URLs
 
-Pass a `configurl.Registry` to `FinderOptions.SetConfigURLRegistry`.
+Pass a `configurl.Registry` to `FinderConfig.SetConfigURLRegistry`.
 For Mobileproxy, use `SmartDialerOptions.ConfigURLRegistry()` to register components
 on the options' registry, or `SetConfigURLRegistry` to supply your own. Component
 libraries can expose `RegisterCustomComponent(opts *mobileproxy.SmartDialerOptions,

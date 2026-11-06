@@ -142,11 +142,11 @@ fallback:
 		return packetDialer, nil
 	}
 	configurl.RegisterBase(registry, parsePacketDialer)
-	opts := smart.NewFinderOptions().
+	finderConfig := smart.NewFinderConfig().
 		SetConfigURLRegistry(registry).
 		SetLogWriter(logger.Writer()).
 		SetTestTimeout(5 * time.Second)
-	opts.RegisterFallbackParser("error", func(ctx context.Context, config smart.YAMLNode) (transport.StreamDialer, string, error) {
+	finderConfig.RegisterFallbackParser("error", func(ctx context.Context, config smart.YAMLNode) (transport.StreamDialer, string, error) {
 		m, ok := config.(map[string]any)
 		if !ok {
 			return nil, "", fmt.Errorf("invalid config of type %T", config)
@@ -154,7 +154,7 @@ fallback:
 		errStr, _ := m["error"].(string)
 		return nil, "signature_placeholder", errors.New(errStr)
 	})
-	finder, err := opts.New()
+	finder, err := finderConfig.New()
 	require.NoError(t, err)
 
 	_, err = finder.NewDialer(context.Background(), testDomains, configBytes)
