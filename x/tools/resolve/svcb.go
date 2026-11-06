@@ -28,14 +28,60 @@ const (
 	typeHTTPS = dnsmessage.Type(mdns.TypeHTTPS)
 )
 
-// formatSVCB formats the RDATA of either an HTTPS or SVCB answer. The pinned
-// dnsmessage version exposes these records as UnknownResource.
-func formatSVCB(answer dnsmessage.Resource) (string, error) {
-	body, ok := answer.Body.(*dnsmessage.UnknownResource)
-	if !ok || body == nil || (answer.Header.Type != typeHTTPS && answer.Header.Type != typeSVCB) {
-		return "", errors.New("expected HTTPS or SVCB resource data")
+// svcbData returns the RDATA of an HTTPS or SVCB answer. Newer dnsmessage
+// versions parse these records into SVCBResource or HTTPSResource, so those are
+// packed back into wire format to share the validation and formatting below.
+func svcbData(answer dnsmessage.Resource) ([]byte, error) {
+	if answer.Header.Type != typeHTTPS && answer.Header.Type != typeSVCB {
+		return nil, errors.New("expected HTTPS or SVCB resource data")
 	}
-	data := body.Data
+	switch body := answer.Body.(type) {
+	case *dnsmessage.UnknownResource:
+		if body != nil {
+			return body.Data, nil
+		}
+	case *dnsmessage.SVCBResource:
+		if body != nil {
+			return packRData(answer)
+		}
+	case *dnsmessage.HTTPSResource:
+		if body != nil {
+			return packRData(answer)
+		}
+	}
+	return nil, errors.New("expected HTTPS or SVCB resource data")
+}
+
+// packRData packs a message holding only the given answer and returns the
+// answer's RDATA, which is the tail of the packed message.
+func packRData(answer dnsmessage.Resource) ([]byte, error) {
+	msg, err := (&dnsmessage.Message{Answers: []dnsmessage.Resource{answer}}).Pack()
+	if err != nil {
+		return nil, fmt.Errorf("invalid HTTPS/SVCB data: %w", err)
+	}
+	var p dnsmessage.Parser
+	if _, err := p.Start(msg); err != nil {
+		return nil, err
+	}
+	if err := p.SkipAllQuestions(); err != nil {
+		return nil, err
+	}
+	header, err := p.AnswerHeader()
+	if err != nil {
+		return nil, err
+	}
+	if int(header.Length) > len(msg) {
+		return nil, errors.New("invalid HTTPS/SVCB data length")
+	}
+	return msg[len(msg)-int(header.Length):], nil
+}
+
+// formatSVCB formats the RDATA of either an HTTPS or SVCB answer.
+func formatSVCB(answer dnsmessage.Resource) (string, error) {
+	data, err := svcbData(answer)
+	if err != nil {
+		return "", err
+	}
 	if len(data) < 3 || len(data) > 65535 {
 		return "", errors.New("invalid HTTPS/SVCB data length")
 	}

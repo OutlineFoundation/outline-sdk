@@ -1,8 +1,8 @@
 module golang.getoutline.org/sdk/x
 
-go 1.24.1
+go 1.26.0
 
-toolchain go1.24.8
+toolchain go1.26.10
 
 // Due to https://github.com/OutlineFoundation/outline-sdk/issues/501
 retract [v0.0.4, v0.0.6]
@@ -18,16 +18,16 @@ require (
 	github.com/gorilla/websocket v1.5.3
 	github.com/lmittmann/tint v1.0.7
 	github.com/miekg/dns v1.1.56
-	github.com/quic-go/quic-go v0.48.1
+	github.com/quic-go/quic-go v0.65.0
 	github.com/songgao/water v0.0.0-20200317203138-2b4b6d7c09d8
-	github.com/stretchr/testify v1.9.0
+	github.com/stretchr/testify v1.12.1
 	github.com/things-go/go-socks5 v0.0.5
 	github.com/vishvananda/netlink v1.2.1-beta.2
 	golang.getoutline.org/sdk v0.0.22
 	golang.org/x/mobile v0.0.0-20240520174638-fa72addaaa1b
-	golang.org/x/net v0.44.0
-	golang.org/x/sys v0.36.0
-	golang.org/x/term v0.35.0
+	golang.org/x/net v0.62.0
+	golang.org/x/sys v0.49.0
+	golang.org/x/term v0.47.0
 )
 
 require (
@@ -54,7 +54,6 @@ require (
 	github.com/cloudflare/circl v1.5.0 // indirect
 	github.com/cognusion/go-cache-lru v0.0.0-20170419142635-f73e2280ecea // indirect
 	github.com/coreos/go-iptables v0.7.0 // indirect
-	github.com/davecgh/go-spew v1.1.1 // indirect
 	github.com/dblohm7/wingoes v0.0.0-20230929194252-e994401fc077 // indirect
 	github.com/dchest/siphash v1.2.3 // indirect
 	github.com/dgraph-io/badger v1.5.4-0.20180815194500-3a87f6d9c273 // indirect
@@ -64,12 +63,10 @@ require (
 	github.com/fxamacker/cbor/v2 v2.5.0 // indirect
 	github.com/gaukas/godicttls v0.0.4 // indirect
 	github.com/go-ole/go-ole v1.3.0 // indirect
-	github.com/go-task/slim-sprig v0.0.0-20230315185526-52ccab3ef572 // indirect
 	github.com/golang/groupcache v0.0.0-20210331224755-41bb18bfe9da // indirect
 	github.com/golang/protobuf v1.5.3 // indirect
 	github.com/google/go-cmp v0.6.0 // indirect
 	github.com/google/nftables v0.1.1-0.20230115205135-9aa6fdf5a28c // indirect
-	github.com/google/pprof v0.0.0-20211214055906-6f57359322fd // indirect
 	github.com/google/uuid v1.3.1 // indirect
 	github.com/grafov/m3u8 v0.0.0-20171211212457-6ab8f28ed427 // indirect
 	github.com/josharian/native v1.1.1-0.20230202152459-5c7d0dd6ab86 // indirect
@@ -80,7 +77,7 @@ require (
 	github.com/mdlayher/netlink v1.7.2 // indirect
 	github.com/mdlayher/socket v0.5.0 // indirect
 	github.com/mroth/weightedrand v1.0.0 // indirect
-	github.com/onsi/ginkgo/v2 v2.12.0 // indirect
+	github.com/onsi/gomega v1.27.10 // indirect
 	github.com/pelletier/go-toml v1.9.5 // indirect
 	github.com/pion/datachannel v1.5.5 // indirect
 	github.com/pion/dtls/v2 v2.2.7 // indirect
@@ -99,8 +96,7 @@ require (
 	github.com/pion/turn/v2 v2.1.3 // indirect
 	github.com/pion/webrtc/v3 v3.2.40 // indirect
 	github.com/pkg/errors v0.9.1 // indirect
-	github.com/pmezard/go-difflib v1.0.0 // indirect
-	github.com/quic-go/qpack v0.5.1 // indirect
+	github.com/quic-go/qpack v0.6.0 // indirect
 	github.com/refraction-networking/conjure v0.7.11-0.20240130155008-c8df96195ab2 // indirect
 	github.com/refraction-networking/ed25519 v0.1.2 // indirect
 	github.com/refraction-networking/gotapdance v1.7.10 // indirect
@@ -117,22 +113,21 @@ require (
 	github.com/wlynxg/anet v0.0.1 // indirect
 	github.com/x448/float16 v0.8.4 // indirect
 	gitlab.torproject.org/tpo/anti-censorship/pluggable-transports/goptlib v1.5.0 // indirect
-	go.uber.org/mock v0.4.0 // indirect
+	go.yaml.in/yaml/v3 v3.0.5 // indirect
 	go4.org/mem v0.0.0-20220726221520-4f986261bf13 // indirect
 	go4.org/netipx v0.0.0-20230824141953-6213f710f925 // indirect
-	golang.org/x/crypto v0.42.0 // indirect
+	golang.org/x/crypto v0.58.0 // indirect
 	golang.org/x/exp v0.0.0-20240506185415-9bf2ced13842 // indirect
 	golang.org/x/exp/typeparams v0.0.0-20231108232855-2478ac86f678 // indirect
-	golang.org/x/mod v0.28.0 // indirect
-	golang.org/x/sync v0.17.0 // indirect
-	golang.org/x/text v0.29.0 // indirect
+	golang.org/x/mod v0.41.0 // indirect
+	golang.org/x/sync v0.24.0 // indirect
+	golang.org/x/text v0.43.0 // indirect
 	golang.org/x/time v0.5.0 // indirect
-	golang.org/x/tools v0.37.0 // indirect
+	golang.org/x/tools v0.51.0 // indirect
 	golang.org/x/tools/go/packages/packagestest v0.1.1-deprecated // indirect
 	golang.zx2c4.com/wireguard v0.0.0-20230325221338-052af4a8072b // indirect
 	golang.zx2c4.com/wireguard/windows v0.5.3 // indirect
 	google.golang.org/protobuf v1.33.0 // indirect
-	gopkg.in/yaml.v3 v3.0.1 // indirect
 	honnef.co/go/tools v0.5.0 // indirect
 	tailscale.com v1.58.2 // indirect
 )

@@ -12,6 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+//lint:file-ignore SA1019 golang.org/x/net/http2 is deprecated in favor of net/http; migrating the HTTP/2 proxy transports is a separate change.
+
 package configurl_test
 
 import (
