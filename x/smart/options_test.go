@@ -61,7 +61,7 @@ func TestFinderOptions(t *testing.T) {
 
 	// Scalar options and the parser map are snapshots, not live builder state.
 	opts.SetTestTimeout(2*time.Second).SetLogWriter(nil).RegisterFallbackParser("custom", nil)
-	dialer, _, err := f.makeDialerFromConfig(context.Background(), registry, map[string]any{"custom": ""})
+	dialer, _, err := f.makeDialerFromConfig(context.Background(), map[string]any{"custom": ""})
 	require.NoError(t, err)
 	require.Equal(t, namedDialer("custom"), dialer)
 	require.Equal(t, time.Second, f.testTimeout)
@@ -159,6 +159,22 @@ func TestDNSMissingRegistryBases(t *testing.T) {
 		_, err := finder.NewDialer(context.Background(), nil, []byte(config))
 		require.ErrorIs(t, err, errors.ErrUnsupported, config)
 	}
+}
+
+func TestDNSUnsupportedErrorIncludesCauses(t *testing.T) {
+	registry := configurl.NewDefaultRegistry()
+	configurl.RegisterBase[transport.StreamDialer](registry, nil)
+	configurl.RegisterBase[transport.PacketDialer](registry, nil)
+	finder, err := NewFinderOptions().SetConfigURLRegistry(registry).New()
+	require.NoError(t, err)
+
+	// Logging is disabled, so the returned error must explain why each entry was skipped.
+	config := `dns: [{udp: {address: resolver.invalid}}, {tcp: {address: resolver.invalid}}]`
+	_, err = finder.NewDialer(context.Background(), nil, []byte(config))
+	require.ErrorIs(t, err, errors.ErrUnsupported)
+	require.ErrorContains(t, err, "no supported DNS config entry")
+	require.ErrorContains(t, err, "entry 0: DNS requires a packet base instance")
+	require.ErrorContains(t, err, "entry 1: DNS requires a stream base instance")
 }
 
 func TestDNSSkipsUnsupportedRegistryBases(t *testing.T) {

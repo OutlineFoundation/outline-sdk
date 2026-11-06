@@ -222,6 +222,7 @@ func (f *finder) dnsConfigToResolver(ctx context.Context, dnsConfig []dnsEntryCo
 		return nil, errors.New("no DNS config entry")
 	}
 	rts := make([]*smartResolver, 0, len(dnsConfig))
+	var unsupportedErrs []error
 	for ei, entry := range dnsConfig {
 		idBytes, err := yaml.Marshal(entry)
 		if err != nil {
@@ -232,6 +233,7 @@ func (f *finder) dnsConfigToResolver(ctx context.Context, dnsConfig []dnsEntryCo
 		if err != nil {
 			if errors.Is(err, errors.ErrUnsupported) {
 				logCtx(ctx, "Skipping unsupported DNS entry %d: %v\n", ei, err)
+				unsupportedErrs = append(unsupportedErrs, fmt.Errorf("entry %v: %w", ei, err))
 				continue
 			}
 			return nil, fmt.Errorf("failed to process entry %v: %w", ei, err)
@@ -239,7 +241,7 @@ func (f *finder) dnsConfigToResolver(ctx context.Context, dnsConfig []dnsEntryCo
 		rts = append(rts, &smartResolver{Resolver: resolver, ID: id, Secure: isSecure, Config: entry})
 	}
 	if len(rts) == 0 {
-		return nil, fmt.Errorf("%.0wno supported DNS config entry", errors.ErrUnsupported)
+		return nil, fmt.Errorf("%.0wno supported DNS config entry: %w", errors.ErrUnsupported, errors.Join(unsupportedErrs...))
 	}
 	return rts, nil
 }
@@ -442,11 +444,11 @@ type SearchResult struct {
 // Make a fallback dialer (either from a configurl or a Psiphon config)
 // Returns a stream dialer, config signature, error
 // In case of an error the stream dialer can be nil, but the string is always set.
-func (f *finder) makeDialerFromConfig(ctx context.Context, registry configurl.Registry, fallbackConfig fallbackEntryConfig) (transport.StreamDialer, string, error) {
+func (f *finder) makeDialerFromConfig(ctx context.Context, fallbackConfig fallbackEntryConfig) (transport.StreamDialer, string, error) {
 	switch v := fallbackConfig.(type) {
 	case string:
 		configUrl := v
-		dialer, err := configurl.New[transport.StreamDialer](ctx, registry, configUrl)
+		dialer, err := configurl.New[transport.StreamDialer](ctx, f.registry, configUrl)
 		if err != nil {
 			return nil, v, fmt.Errorf("getStreamDialer failed: %w", err)
 		}
@@ -498,7 +500,7 @@ func (f *finder) findFallback(
 	raceStart := time.Now()
 
 	fallback, err := raceTests(raceCtx, 250*time.Millisecond, fallbackConfigs, func(index int, fallbackConfig fallbackEntryConfig) (*SearchResult, error) {
-		dialer, configSignature, err := f.makeDialerFromConfig(raceCtx, f.registry, fallbackConfig)
+		dialer, configSignature, err := f.makeDialerFromConfig(raceCtx, fallbackConfig)
 		if err != nil {
 			// Make up a config signature in case of failure.
 			configSignature := makeConfigErrorSignature(raceCtx, fallbackConfig)

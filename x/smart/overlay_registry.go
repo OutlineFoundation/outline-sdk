@@ -20,6 +20,8 @@ import (
 	"golang.getoutline.org/sdk/x/configurl"
 )
 
+var _ configurl.Registry = overlayRegistry{}
+
 // overlayRegistry looks up entries in top before falling back to bottom.
 // Entries present in top, including nil parsers, override bottom.
 type overlayRegistry struct {
