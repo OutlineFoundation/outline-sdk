@@ -93,8 +93,11 @@ func (f *StrategyFinder) RegisterFallbackParser(name string, parser FallbackPars
 // their original bases.
 func (f *StrategyFinder) NewDialer(ctx context.Context, testDomains []string, config []byte) (transport.StreamDialer, error) {
 	f.registryOnce.Do(f.initLegacyRegistry)
-	// Snapshot the mutable legacy configuration for this search. Do not apply the
-	// new options validation here: legacy callers may use zero-valued options.
+	// Snapshot the timeout, log writer, cache, and fallback registrations for this
+	// search. The registry's base parsers read StreamDialer and PacketDialer live
+	// whenever a base is constructed, so those fields must not change during the
+	// search. Do not apply the new options validation here: legacy callers may use
+	// zero-valued options.
 	delegate := &finder{
 		registry:        f.registry,
 		testTimeout:     f.TestTimeout,

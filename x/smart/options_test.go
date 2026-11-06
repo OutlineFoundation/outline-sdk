@@ -177,6 +177,27 @@ func TestDNSUnsupportedErrorIncludesCauses(t *testing.T) {
 	require.ErrorContains(t, err, "entry 1: DNS requires a stream base instance")
 }
 
+func TestDNSValidatesEntriesBeforeBases(t *testing.T) {
+	registry := configurl.NewDefaultRegistry()
+	configurl.RegisterBase[transport.StreamDialer](registry, nil)
+	configurl.RegisterBase[transport.PacketDialer](registry, nil)
+	finder, err := NewFinderOptions().SetConfigURLRegistry(registry).New()
+	require.NoError(t, err)
+	for config, message := range map[string]string{
+		`dns: [{https: {name: ""}}]`:  "https entry has empty server name",
+		`dns: [{tls: {name: ""}}]`:    "tls entry has empty server name",
+		`dns: [{tcp: {address: ""}}]`: "tcp entry has empty server address",
+		`dns: [{udp: {address: ""}}]`: "udp entry has empty server address",
+	} {
+		t.Run(config, func(t *testing.T) {
+			// A missing base must not hide an invalid entry as unsupported.
+			_, err := finder.NewDialer(context.Background(), nil, []byte(config))
+			require.ErrorContains(t, err, message)
+			require.NotErrorIs(t, err, errors.ErrUnsupported)
+		})
+	}
+}
+
 func TestDNSSkipsUnsupportedRegistryBases(t *testing.T) {
 	for _, config := range []string{
 		`dns: [{system: {}}, {udp: {address: resolver.invalid}}]`,

@@ -140,10 +140,6 @@ func (f *finder) newDNSResolverFromEntry(ctx context.Context, entry dnsEntryConf
 	}
 
 	if cfg := entry.HTTPS; cfg != nil {
-		baseSD, err := configurl.NewFromConfig[transport.StreamDialer](ctx, f.registry, nil)
-		if err != nil {
-			return nil, false, fmt.Errorf("DNS requires a stream base instance: %w", err)
-		}
 		if cfg.Name == "" {
 			return nil, true, errors.New("https entry has empty server name")
 		}
@@ -157,12 +153,12 @@ func (f *finder) newDNSResolverFromEntry(ctx context.Context, entry dnsEntryConf
 			port = "443"
 		}
 		dohURL := url.URL{Scheme: "https", Host: net.JoinHostPort(cfg.Name, port), Path: "/dns-query"}
-		return dns.NewHTTPSResolver(baseSD, serverAddr, dohURL.String()), true, nil
-	} else if cfg := entry.TLS; cfg != nil {
 		baseSD, err := configurl.NewFromConfig[transport.StreamDialer](ctx, f.registry, nil)
 		if err != nil {
 			return nil, false, fmt.Errorf("DNS requires a stream base instance: %w", err)
 		}
+		return dns.NewHTTPSResolver(baseSD, serverAddr, dohURL.String()), true, nil
+	} else if cfg := entry.TLS; cfg != nil {
 		if cfg.Name == "" {
 			return nil, true, errors.New("tls entry has empty server name")
 		}
@@ -170,16 +166,15 @@ func (f *finder) newDNSResolverFromEntry(ctx context.Context, entry dnsEntryConf
 		if serverAddr == "" {
 			serverAddr = cfg.Name
 		}
-		_, _, err = net.SplitHostPort(serverAddr)
-		if err != nil {
+		if _, _, err := net.SplitHostPort(serverAddr); err != nil {
 			serverAddr = net.JoinHostPort(serverAddr, "853")
 		}
-		return dns.NewTLSResolver(baseSD, serverAddr, cfg.Name), true, nil
-	} else if cfg := entry.TCP; cfg != nil {
 		baseSD, err := configurl.NewFromConfig[transport.StreamDialer](ctx, f.registry, nil)
 		if err != nil {
 			return nil, false, fmt.Errorf("DNS requires a stream base instance: %w", err)
 		}
+		return dns.NewTLSResolver(baseSD, serverAddr, cfg.Name), true, nil
+	} else if cfg := entry.TCP; cfg != nil {
 		if cfg.Address == "" {
 			return nil, false, errors.New("tcp entry has empty server address")
 		}
@@ -189,12 +184,12 @@ func (f *finder) newDNSResolverFromEntry(ctx context.Context, entry dnsEntryConf
 			port = "53"
 		}
 		serverAddr := net.JoinHostPort(host, port)
+		baseSD, err := configurl.NewFromConfig[transport.StreamDialer](ctx, f.registry, nil)
+		if err != nil {
+			return nil, false, fmt.Errorf("DNS requires a stream base instance: %w", err)
+		}
 		return dns.NewTCPResolver(baseSD, serverAddr), false, nil
 	} else if cfg := entry.UDP; cfg != nil {
-		basePD, err := configurl.NewFromConfig[transport.PacketDialer](ctx, f.registry, nil)
-		if err != nil {
-			return nil, false, fmt.Errorf("DNS requires a packet base instance: %w", err)
-		}
 		if cfg.Address == "" {
 			return nil, false, errors.New("udp entry has empty server address")
 		}
@@ -204,6 +199,10 @@ func (f *finder) newDNSResolverFromEntry(ctx context.Context, entry dnsEntryConf
 			port = "53"
 		}
 		serverAddr := net.JoinHostPort(host, port)
+		basePD, err := configurl.NewFromConfig[transport.PacketDialer](ctx, f.registry, nil)
+		if err != nil {
+			return nil, false, fmt.Errorf("DNS requires a packet base instance: %w", err)
+		}
 		return dns.NewUDPResolver(basePD, serverAddr), false, nil
 	} else {
 		return nil, false, errors.New("invalid DNS entry")
