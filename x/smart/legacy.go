@@ -18,6 +18,7 @@ import (
 	"context"
 	"io"
 	"maps"
+	"reflect"
 	"sync"
 	"time"
 
@@ -26,8 +27,8 @@ import (
 )
 
 // StrategyFinder searches for working DNS, TLS, and fallback strategies.
-// Do not change its fields or fallback registrations while NewDialer is running,
-// or copy it after its first use.
+// Each NewDialer call copies the fields and fallback registrations when it starts.
+// Do not change them concurrently with NewDialer calls.
 //
 // Deprecated: Use [NewFinderConfig] to create a [Finder] instead.
 type StrategyFinder struct {
@@ -49,35 +50,15 @@ type StrategyFinder struct {
 	// passed to FinderConfig.SetConfigURLRegistry instead.
 	PacketDialer transport.PacketDialer
 
-	// registryOnce initializes the legacy base parsers before concurrent searches.
-	registryOnce    sync.Once
-	registry        configurl.Registry
 	fallbackParsers map[string]FallbackParser
 }
 
-// initLegacyRegistry registers base parsers that read the current legacy
-// dialer fields. Changes between searches affect new dialers, while previously
-// constructed dialers keep their original bases.
-func (f *StrategyFinder) initLegacyRegistry() {
-	registry := configurl.NewDefaultRegistry()
-	defaultSD := &transport.TCPDialer{}
-	parseStreamDialer := func(context.Context, configurl.Registry, *configurl.Config) (transport.StreamDialer, error) {
-		if streamDialer := f.StreamDialer; streamDialer != nil {
-			return streamDialer, nil
-		}
-		return defaultSD, nil
-	}
-	configurl.RegisterBase(registry, parseStreamDialer)
-	defaultPD := &transport.UDPDialer{}
-	parsePacketDialer := func(context.Context, configurl.Registry, *configurl.Config) (transport.PacketDialer, error) {
-		if packetDialer := f.PacketDialer; packetDialer != nil {
-			return packetDialer, nil
-		}
-		return defaultPD, nil
-	}
-	configurl.RegisterBase(registry, parsePacketDialer)
-	f.registry = registry
-}
+// legacyDefaultRegistry is shared by all legacy searches and never modified, so
+// concurrent searches can read it. Its stream and packet bases are the stable
+// defaults used when the legacy dialer fields are nil.
+var legacyDefaultRegistry = sync.OnceValue(func() configurl.Registry {
+	return configurl.NewDefaultRegistry()
+})
 
 // RegisterFallbackParser registers or replaces the parser for a YAML fallback type.
 // Finish registrations before calling NewDialer.
@@ -88,22 +69,40 @@ func (f *StrategyFinder) RegisterFallbackParser(name string, parser FallbackPars
 	f.fallbackParsers[name] = parser
 }
 
-// NewDialer implements [Finder]. Changes to fields and fallback registrations
-// between calls affect subsequent searches. Previously returned dialers retain
-// their original bases.
-func (f *StrategyFinder) NewDialer(ctx context.Context, testDomains []string, config []byte) (transport.StreamDialer, error) {
-	f.registryOnce.Do(f.initLegacyRegistry)
-	// Snapshot the timeout, log writer, cache, and fallback registrations for this
-	// search. The registry's base parsers read StreamDialer and PacketDialer live
-	// whenever a base is constructed, so those fields must not change during the
-	// search. Do not apply FinderConfig validation here: legacy callers may use
-	// zero-valued fields.
-	delegate := &finder{
-		registry:        f.registry,
+// newFinder copies the legacy configuration for one search. The registry
+// overrides only the bases whose legacy fields are set; nil fields fall through
+// to the shared defaults. Do not apply FinderConfig validation here: legacy
+// callers may use zero-valued fields.
+func (f *StrategyFinder) newFinder() *finder {
+	bases := registryMap{}
+	if streamDialer := f.StreamDialer; streamDialer != nil {
+		parseStreamDialer := func(context.Context, configurl.Registry, *configurl.Config) (transport.StreamDialer, error) {
+			return streamDialer, nil
+		}
+		bases[reflect.TypeFor[transport.StreamDialer]()] = map[string]any{
+			"": configurl.Parser[transport.StreamDialer](parseStreamDialer),
+		}
+	}
+	if packetDialer := f.PacketDialer; packetDialer != nil {
+		parsePacketDialer := func(context.Context, configurl.Registry, *configurl.Config) (transport.PacketDialer, error) {
+			return packetDialer, nil
+		}
+		bases[reflect.TypeFor[transport.PacketDialer]()] = map[string]any{
+			"": configurl.Parser[transport.PacketDialer](parsePacketDialer),
+		}
+	}
+	return &finder{
+		registry:        overlayRegistry{top: bases, bottom: legacyDefaultRegistry()},
 		testTimeout:     f.TestTimeout,
 		logWriter:       f.LogWriter,
 		cache:           f.Cache,
 		fallbackParsers: maps.Clone(f.fallbackParsers),
 	}
-	return delegate.NewDialer(ctx, testDomains, config)
+}
+
+// NewDialer implements [Finder]. Changes to fields and fallback registrations
+// between calls affect subsequent searches. Previously returned dialers retain
+// their original bases.
+func (f *StrategyFinder) NewDialer(ctx context.Context, testDomains []string, config []byte) (transport.StreamDialer, error) {
+	return f.newFinder().NewDialer(ctx, testDomains, config)
 }

@@ -84,13 +84,12 @@ func TestLegacyFinderRegistry(t *testing.T) {
 				finder.PacketDialer = pd
 			}
 			streamDialer, packetDialer := finder.StreamDialer, finder.PacketDialer
-			// Invalid YAML still initializes the registry. A later call can retry.
+			// A failed search does not modify the legacy fields.
 			_, err := finder.NewDialer(context.Background(), nil, []byte("["))
 			require.Error(t, err)
-			registry := finder.registry
-			require.NotNil(t, registry)
 			require.Equal(t, streamDialer, finder.StreamDialer)
 			require.Equal(t, packetDialer, finder.PacketDialer)
+			registry := finder.newFinder().registry
 			packetBase, err := configurl.NewFromConfig[transport.PacketDialer](context.Background(), registry, nil)
 			require.NoError(t, err)
 			listenerBase, err := configurl.NewFromConfig[transport.PacketListener](context.Background(), registry, nil)
@@ -104,7 +103,6 @@ func TestLegacyFinderRegistry(t *testing.T) {
 			for range 2 {
 				dialer, err := finder.NewDialer(context.Background(), nil, []byte(`fallback: [""]`))
 				require.NoError(t, err)
-				require.Same(t, registry, finder.registry)
 				if mode == "stream" || mode == "both" {
 					// Legacy bases now apply to fallback configs as well as DNS/TLS.
 					require.Equal(t, namedDialer("legacy"), dialer)
@@ -122,7 +120,7 @@ func TestLegacyFinderDialerUpdates(t *testing.T) {
 	fallbackConfig := []byte(`fallback: [""]`)
 	defaultSD, err := finder.NewDialer(ctx, nil, fallbackConfig)
 	require.NoError(t, err)
-	registry := finder.registry
+	registry := finder.newFinder().registry
 	defaultPD, err := configurl.NewFromConfig[transport.PacketDialer](ctx, registry, nil)
 	require.NoError(t, err)
 	listener, err := configurl.NewFromConfig[transport.PacketListener](ctx, registry, nil)
@@ -151,23 +149,22 @@ tls: ["tlsfrag:1"]
 		_, err = dialer.DialStream(ctx, "target.invalid:443")
 		require.EqualError(t, err, name+"@192.0.2.42:443")
 		require.EqualValues(t, 2, pd.queries.Load(), "DNS uses the current packet dialer")
-		require.Same(t, registry, finder.registry, "field updates reuse the registry")
 		results = append(results, result{name, dialer, pd})
 	}
 
-	// Clearing the fields restores the same defaults without replacing the registry.
+	// Clearing the fields restores the same defaults.
 	finder.StreamDialer = nil
 	finder.PacketDialer = nil
 	sd, err := finder.NewDialer(ctx, nil, fallbackConfig)
 	require.NoError(t, err)
 	require.Same(t, defaultSD, sd)
+	registry = finder.newFinder().registry
 	pd, err := configurl.NewFromConfig[transport.PacketDialer](ctx, registry, nil)
 	require.NoError(t, err)
 	require.Same(t, defaultPD, pd)
 	pl, err := configurl.NewFromConfig[transport.PacketListener](ctx, registry, nil)
 	require.NoError(t, err)
 	require.Same(t, listener, pl, "legacy fields do not affect the packet listener")
-	require.Same(t, registry, finder.registry)
 
 	// Previously returned dialers retain both bases, even for an uncached name.
 	for _, result := range results {
@@ -177,7 +174,7 @@ tls: ["tlsfrag:1"]
 	}
 }
 
-func TestLegacyFinderConcurrentFirstUse(t *testing.T) {
+func TestLegacyFinderConcurrentSearches(t *testing.T) {
 	finder := &StrategyFinder{}
 	var wg sync.WaitGroup
 	for _, name := range []string{"first", "second"} {
@@ -194,4 +191,38 @@ func TestLegacyFinderConcurrentFirstUse(t *testing.T) {
 		}
 		wg.Wait()
 	}
+}
+
+func TestLegacyFinderCopies(t *testing.T) {
+	ctx := context.Background()
+	fallbackConfig := []byte(`fallback: [""]`)
+	original := &StrategyFinder{StreamDialer: namedDialer("original")}
+	_, err := original.NewDialer(ctx, nil, fallbackConfig)
+	require.NoError(t, err)
+
+	// A copy made after first use searches with its own fields.
+	copied := *original
+	copied.StreamDialer = namedDialer("copy")
+	dialer, err := copied.NewDialer(ctx, nil, fallbackConfig)
+	require.NoError(t, err)
+	require.Equal(t, namedDialer("copy"), dialer)
+	dialer, err = original.NewDialer(ctx, nil, fallbackConfig)
+	require.NoError(t, err)
+	require.Equal(t, namedDialer("original"), dialer)
+}
+
+func TestLegacyFinderCopiesDialersPerSearch(t *testing.T) {
+	finder := &StrategyFinder{StreamDialer: namedDialer("before")}
+	// The first fallback fails after changing the field, so the second fallback is
+	// built later in the same search.
+	finder.RegisterFallbackParser("change", func(context.Context, YAMLNode) (transport.StreamDialer, string, error) {
+		finder.StreamDialer = namedDialer("after")
+		return nil, "", errors.New("changed the stream base")
+	})
+	dialer, err := finder.NewDialer(context.Background(), nil, []byte(`fallback: [{change: ""}, ""]`))
+	require.NoError(t, err)
+	require.Equal(t, namedDialer("before"), dialer, "a search keeps the bases it started with")
+	dialer, err = finder.NewDialer(context.Background(), nil, []byte(`fallback: [""]`))
+	require.NoError(t, err)
+	require.Equal(t, namedDialer("after"), dialer, "the next search uses the updated field")
 }
