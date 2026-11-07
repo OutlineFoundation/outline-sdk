@@ -154,7 +154,11 @@ func parseShadowsocksSIP002URL(url url.URL) (*shadowsocksConfig, error) {
 		return nil, errors.New("host not specified")
 	}
 	config.serverAddress = url.Host
-	userInfo := url.User.String()
+	// Use the decoded user info. url.User.String() would return it percent-encoded again.
+	userInfo := url.User.Username()
+	if password, ok := url.User.Password(); ok {
+		userInfo += ":" + password
+	}
 	// Cipher info can be optionally encoded with Base64URL.
 	encoding := base64.URLEncoding.WithPadding(base64.NoPadding)
 	decodedUserInfo, err := encoding.DecodeString(userInfo)

@@ -20,6 +20,7 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/require"
+	"golang.getoutline.org/sdk/transport/shadowsocks"
 )
 
 func Test_sanitizeShadowsocksURL(t *testing.T) {
@@ -99,6 +100,37 @@ func TestParseShadowsocksURLNoEncoding(t *testing.T) {
 
 	require.NoError(t, err)
 	require.Equal(t, "example.com:1234", ssConfig.serverAddress)
+}
+
+func TestParseShadowsocksURLNoEncodingPercentEncodedPassword(t *testing.T) {
+	// SIP002 requires the password in a plain user info to be percent-encoded.
+	configString := "ss://chacha20-ietf-poly1305:pass%2Fw%3Fo%40r%7Cd%20%25@example.com:1234"
+	config, err := ParseConfig(configString)
+	require.NoError(t, err)
+	require.Nil(t, config.BaseConfig)
+
+	ssConfig, err := parseShadowsocksURL(config.URL)
+
+	require.NoError(t, err)
+	require.Equal(t, "example.com:1234", ssConfig.serverAddress)
+	expectedKey, err := shadowsocks.NewEncryptionKey("chacha20-ietf-poly1305", "pass/w?o@r|d %")
+	require.NoError(t, err)
+	require.Equal(t, expectedKey, ssConfig.cryptoKey)
+}
+
+func TestParseShadowsocksURLUserInfoLegacyEncodedWithSlash(t *testing.T) {
+	// Standard base64 may contain '/', which must be percent-encoded in the URL.
+	encoded := base64.StdEncoding.EncodeToString([]byte("aes-128-gcm:?????"))
+	require.Contains(t, encoded, "/")
+	config, err := ParseConfig("ss://" + url.PathEscape(encoded) + "@example.com:1234")
+	require.NoError(t, err)
+
+	ssConfig, err := parseShadowsocksURL(config.URL)
+
+	require.NoError(t, err)
+	expectedKey, err := shadowsocks.NewEncryptionKey("aes-128-gcm", "?????")
+	require.NoError(t, err)
+	require.Equal(t, expectedKey, ssConfig.cryptoKey)
 }
 
 func TestParseShadowsocksURLInvalidCipherInfoFails(t *testing.T) {
