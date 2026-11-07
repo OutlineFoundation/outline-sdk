@@ -57,6 +57,14 @@ func registerSplitStreamDialer(r TypeRegistry[transport.StreamDialer], typeID st
 			}
 			splits = append(splits, split.RepeatedSplit{Count: count, Bytes: bytes})
 		}
-		return split.NewStreamDialer(sd, split.NewRepeatedSplitIterator(splits...))
+		// A SplitIterator is stateful, so each connection needs its own. Sharing one across
+		// connections would only split the first connection and race on concurrent dials.
+		return transport.FuncStreamDialer(func(ctx context.Context, addr string) (transport.StreamConn, error) {
+			innerConn, err := sd.DialStream(ctx, addr)
+			if err != nil {
+				return nil, err
+			}
+			return transport.WrapConn(innerConn, innerConn, split.NewWriter(innerConn, split.NewRepeatedSplitIterator(splits...))), nil
+		}), nil
 	})
 }
