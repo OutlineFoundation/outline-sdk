@@ -20,6 +20,7 @@ import (
 	"sync"
 	"testing"
 
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"golang.getoutline.org/sdk/transport"
 )
@@ -82,9 +83,11 @@ func TestSplit_ConcurrentDials(t *testing.T) {
 		go func() {
 			defer wg.Done()
 			conn, err := dialer.DialStream(context.Background(), "example.com:443")
-			require.NoError(t, err)
+			if !assert.NoError(t, err) {
+				return
+			}
 			_, err = conn.Write([]byte("hello"))
-			require.NoError(t, err)
+			assert.NoError(t, err)
 		}()
 	}
 	wg.Wait()
