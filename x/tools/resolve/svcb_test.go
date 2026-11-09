@@ -83,6 +83,41 @@ func TestFormatSVCB(t *testing.T) {
 	}
 }
 
+// TestFormatSVCBParsed covers answers that dnsmessage parses into
+// SVCBResource or HTTPSResource instead of UnknownResource.
+func TestFormatSVCBParsed(t *testing.T) {
+	for _, tc := range []struct{ name, wire, want string }{
+		{"alias", "000003666f6f076578616d706c6503636f6d00", "0 foo.example.com."},
+		{"parameters", serviceData, serviceText},
+	} {
+		for _, qtype := range []dnsmessage.Type{typeHTTPS, typeSVCB} {
+			t.Run(tc.name+"/"+qtype.String(), func(t *testing.T) {
+				msg, err := (&dnsmessage.Message{Answers: []dnsmessage.Resource{bindingAnswer(qtype, decodeHex(t, tc.wire))}}).Pack()
+				if err != nil {
+					t.Fatal(err)
+				}
+				var parsed dnsmessage.Message
+				if err := parsed.Unpack(msg); err != nil {
+					t.Fatal(err)
+				}
+				answer := parsed.Answers[0]
+				switch answer.Body.(type) {
+				case *dnsmessage.SVCBResource, *dnsmessage.HTTPSResource:
+				default:
+					t.Fatalf("unexpected parsed body type %T", answer.Body)
+				}
+				got, err := formatSVCB(answer)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if got != tc.want {
+					t.Fatalf("got %q, want %q", got, tc.want)
+				}
+			})
+		}
+	}
+}
+
 func TestFormatSVCBMalformed(t *testing.T) {
 	for _, tc := range []struct{ name, wire string }{
 		{"empty", ""},

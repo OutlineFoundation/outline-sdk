@@ -12,6 +12,10 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+// TODO: migrate from the deprecated golang.org/x/net/http2 to net/http
+// (http.Transport.Protocols, http.Server.Protocols) and remove this lint suppression.
+//lint:file-ignore SA1019 golang.org/x/net/http2 is deprecated in favor of net/http; see TODO above.
+
 package httpconnect
 
 import (
@@ -181,7 +185,7 @@ func NewH3ProxyTransport(conn net.PacketConn, proxyAddr string, opts ...Transpor
 	}
 
 	tr := &http3.Transport{
-		Dial: func(ctx context.Context, _ string, tlsCfg *stdTLS.Config, quicCfg *quic.Config) (quic.EarlyConnection, error) {
+		Dial: func(ctx context.Context, _ string, tlsCfg *stdTLS.Config, quicCfg *quic.Config) (*quic.Conn, error) {
 			parsedProxyAddr, err := transport.MakeNetAddr("udp", proxyAddr)
 			if err != nil {
 				return nil, fmt.Errorf("failed to parse proxy address %s: %w", proxyAddr, err)
