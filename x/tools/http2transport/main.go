@@ -24,6 +24,7 @@ import (
 	"os/signal"
 	"time"
 
+	"golang.getoutline.org/sdk/transport"
 	"golang.getoutline.org/sdk/x/configurl"
 	"golang.getoutline.org/sdk/x/httpproxy"
 )
@@ -34,7 +35,7 @@ func main() {
 	urlProxyPrefixFlag := flag.String("urlProxyPrefix", "/proxy", "Path where to run the URL proxy. Set to empty (\"\") to disable it.")
 	flag.Parse()
 
-	dialer, err := configurl.NewDefaultProviders().NewStreamDialer(context.Background(), *transportFlag)
+	dialer, err := configurl.New[transport.StreamDialer](context.Background(), configurl.NewDefaultRegistry(), *transportFlag)
 
 	if err != nil {
 		log.Fatalf("Could not create dialer: %v", err)

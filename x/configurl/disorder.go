@@ -23,17 +23,15 @@ import (
 	"golang.getoutline.org/sdk/x/disorder"
 )
 
-func registerDisorderDialer(r TypeRegistry[transport.StreamDialer], typeID string, newSD BuildFunc[transport.StreamDialer]) {
-	r.RegisterType(typeID, func(ctx context.Context, config *Config) (transport.StreamDialer, error) {
-		sd, err := newSD(ctx, config.BaseConfig)
-		if err != nil {
-			return nil, err
-		}
-		disorderPacketNStr := config.URL.Opaque
-		disorderPacketN, err := strconv.Atoi(disorderPacketNStr)
-		if err != nil {
-			return nil, fmt.Errorf("disoder: could not parse splice position: %v", err)
-		}
-		return disorder.NewStreamDialer(sd, disorderPacketN)
-	})
+func parseDisorderDialer(ctx context.Context, registry Registry, config *Config) (transport.StreamDialer, error) {
+	sd, err := NewFromConfig[transport.StreamDialer](ctx, registry, config.BaseConfig)
+	if err != nil {
+		return nil, err
+	}
+	disorderPacketNStr := config.URL.Opaque
+	disorderPacketN, err := strconv.Atoi(disorderPacketNStr)
+	if err != nil {
+		return nil, fmt.Errorf("disoder: could not parse splice position: %v", err)
+	}
+	return disorder.NewStreamDialer(sd, disorderPacketN)
 }

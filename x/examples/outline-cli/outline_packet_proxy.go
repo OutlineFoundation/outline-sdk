@@ -36,7 +36,7 @@ type outlinePacketProxy struct {
 func newOutlinePacketProxy(transportConfig string) (opp *outlinePacketProxy, err error) {
 	opp = &outlinePacketProxy{}
 
-	if opp.remotePl, err = configurl.NewDefaultProviders().NewPacketListener(context.TODO(), transportConfig); err != nil {
+	if opp.remotePl, err = configurl.New[transport.PacketListener](context.TODO(), configurl.NewDefaultRegistry(), transportConfig); err != nil {
 		return nil, fmt.Errorf("failed to create UDP packet listener: %w", err)
 	}
 	if opp.remote, err = network.NewPacketProxyFromPacketListener(opp.remotePl); err != nil {

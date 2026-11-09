@@ -57,50 +57,46 @@ func parseWSConfig(configURL url.URL) (*wsConfig, error) {
 	return &cfg, nil
 }
 
-func registerWebsocketStreamDialer(r TypeRegistry[transport.StreamDialer], typeID string, newSD BuildFunc[transport.StreamDialer]) {
-	r.RegisterType(typeID, func(ctx context.Context, config *Config) (transport.StreamDialer, error) {
-		sd, err := newSD(ctx, config.BaseConfig)
+func parseWebsocketStreamDialer(ctx context.Context, registry Registry, config *Config) (transport.StreamDialer, error) {
+	sd, err := NewFromConfig[transport.StreamDialer](ctx, registry, config.BaseConfig)
+	if err != nil {
+		return nil, err
+	}
+	wsConfig, err := parseWSConfig(config.URL)
+	if err != nil {
+		return nil, err
+	}
+	if wsConfig.tcpPath == "" {
+		return nil, errors.New("must specify tcp_path")
+	}
+	return transport.FuncStreamDialer(func(ctx context.Context, addr string) (transport.StreamConn, error) {
+		wsURL := url.URL{Scheme: "ws", Host: addr, Path: wsConfig.tcpPath}
+		connect, err := websocket.NewStreamEndpoint(wsURL.String(), &transport.StreamDialerEndpoint{Address: addr, Dialer: sd})
 		if err != nil {
-			return nil, err
+			return nil, fmt.Errorf("failed to create websocket stream endpoint: %w", err)
 		}
-		wsConfig, err := parseWSConfig(config.URL)
-		if err != nil {
-			return nil, err
-		}
-		if wsConfig.tcpPath == "" {
-			return nil, errors.New("must specify tcp_path")
-		}
-		return transport.FuncStreamDialer(func(ctx context.Context, addr string) (transport.StreamConn, error) {
-			wsURL := url.URL{Scheme: "ws", Host: addr, Path: wsConfig.tcpPath}
-			connect, err := websocket.NewStreamEndpoint(wsURL.String(), &transport.StreamDialerEndpoint{Address: addr, Dialer: sd})
-			if err != nil {
-				return nil, fmt.Errorf("failed to create websocket stream endpoint: %w", err)
-			}
-			return connect(ctx)
-		}), nil
-	})
+		return connect(ctx)
+	}), nil
 }
 
-func registerWebsocketPacketDialer(r TypeRegistry[transport.PacketDialer], typeID string, newSD BuildFunc[transport.StreamDialer]) {
-	r.RegisterType(typeID, func(ctx context.Context, config *Config) (transport.PacketDialer, error) {
-		sd, err := newSD(ctx, config.BaseConfig)
+func parseWebsocketPacketDialer(ctx context.Context, registry Registry, config *Config) (transport.PacketDialer, error) {
+	sd, err := NewFromConfig[transport.StreamDialer](ctx, registry, config.BaseConfig)
+	if err != nil {
+		return nil, err
+	}
+	wsConfig, err := parseWSConfig(config.URL)
+	if err != nil {
+		return nil, err
+	}
+	if wsConfig.udpPath == "" {
+		return nil, errors.New("must specify udp_path")
+	}
+	return transport.FuncPacketDialer(func(ctx context.Context, addr string) (net.Conn, error) {
+		wsURL := url.URL{Scheme: "ws", Host: addr, Path: wsConfig.udpPath}
+		connect, err := websocket.NewPacketEndpoint(wsURL.String(), &transport.StreamDialerEndpoint{Address: addr, Dialer: sd})
 		if err != nil {
-			return nil, err
+			return nil, fmt.Errorf("failed to create websocket stream endpoint: %w", err)
 		}
-		wsConfig, err := parseWSConfig(config.URL)
-		if err != nil {
-			return nil, err
-		}
-		if wsConfig.udpPath == "" {
-			return nil, errors.New("must specify udp_path")
-		}
-		return transport.FuncPacketDialer(func(ctx context.Context, addr string) (net.Conn, error) {
-			wsURL := url.URL{Scheme: "ws", Host: addr, Path: wsConfig.udpPath}
-			connect, err := websocket.NewPacketEndpoint(wsURL.String(), &transport.StreamDialerEndpoint{Address: addr, Dialer: sd})
-			if err != nil {
-				return nil, fmt.Errorf("failed to create websocket stream endpoint: %w", err)
-			}
-			return connect(ctx)
-		}), nil
-	})
+		return connect(ctx)
+	}), nil
 }

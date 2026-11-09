@@ -26,10 +26,10 @@ import (
 	"os/signal"
 	"time"
 
+	"github.com/lmittmann/tint"
 	"golang.getoutline.org/sdk/transport"
 	"golang.getoutline.org/sdk/x/configurl"
 	"golang.getoutline.org/sdk/x/websocket"
-	"github.com/lmittmann/tint"
 	"golang.org/x/term"
 )
 
@@ -67,10 +67,10 @@ func main() {
 	defer listener.Close()
 	slog.Info("Proxy listening", "address", listener.Addr().String())
 
-	providers := configurl.NewDefaultProviders()
+	registry := configurl.NewDefaultRegistry()
 	mux := http.NewServeMux()
 	if *tcpPathFlag != "" {
-		dialer, err := providers.NewStreamDialer(context.Background(), *transportFlag)
+		dialer, err := configurl.New[transport.StreamDialer](context.Background(), registry, *transportFlag)
 		if err != nil {
 			log.Fatalf("Could not create stream dialer: %v", err)
 		}
@@ -108,7 +108,7 @@ func main() {
 		mux.Handle(*tcpPathFlag, http.StripPrefix(*tcpPathFlag, handler))
 	}
 	if *udpPathFlag != "" {
-		dialer, err := providers.NewPacketDialer(context.Background(), *transportFlag)
+		dialer, err := configurl.New[transport.PacketDialer](context.Background(), registry, *transportFlag)
 		if err != nil {
 			log.Fatalf("Could not create stream dialer: %v", err)
 		}

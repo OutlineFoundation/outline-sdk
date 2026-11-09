@@ -29,10 +29,10 @@ import (
 	"sync"
 	"time"
 
+	"github.com/goccy/go-yaml"
 	"golang.getoutline.org/sdk/dns"
 	"golang.getoutline.org/sdk/transport"
 	"golang.getoutline.org/sdk/x/configurl"
-	"github.com/goccy/go-yaml"
 )
 
 // To test one strategy:
@@ -349,8 +349,11 @@ func (f *StrategyFinder) findTLS(
 	if len(tlsConfig) == 0 {
 		return nil, "", errors.New("config for TLS is empty. Please specify at least one transport")
 	}
-	var configModule = configurl.NewDefaultProviders()
-	configModule.StreamDialers.BaseInstance = baseDialer
+	var configRegistry = configurl.NewDefaultRegistry()
+	newBase := func(context.Context, configurl.Registry, *configurl.Config) (transport.StreamDialer, error) {
+		return baseDialer, nil
+	}
+	configurl.RegisterBase(configRegistry, newBase)
 
 	raceCtx, raceDone := context.WithCancel(ctx)
 	defer raceDone()
@@ -360,7 +363,7 @@ func (f *StrategyFinder) findTLS(
 		Config string
 	}
 	result, err := raceTests(raceCtx, 250*time.Millisecond, tlsConfig, func(index int, transportCfg string) (*SearchResult, error) {
-		tlsDialer, err := configModule.NewStreamDialer(raceCtx, transportCfg)
+		tlsDialer, err := configurl.New[transport.StreamDialer](raceCtx, configRegistry, transportCfg)
 		if err != nil {
 			logCtx(raceCtx, "❌ Failed to create tls[%d]: %v, error=%v\n", index, transportCfg, err)
 			return nil, fmt.Errorf("NewStreamDialer failed: %w", err)
@@ -404,11 +407,11 @@ type SearchResult struct {
 // Make a fallback dialer (either from a configurl or a Psiphon config)
 // Returns a stream dialer, config signature, error
 // In case of an error the stream dialer can be nil, but the string is always set.
-func (f *StrategyFinder) makeDialerFromConfig(ctx context.Context, configModule *configurl.ProviderContainer, fallbackConfig fallbackEntryConfig) (transport.StreamDialer, string, error) {
+func (f *StrategyFinder) makeDialerFromConfig(ctx context.Context, configRegistry configurl.Registry, fallbackConfig fallbackEntryConfig) (transport.StreamDialer, string, error) {
 	switch v := fallbackConfig.(type) {
 	case string:
 		configUrl := v
-		dialer, err := configModule.NewStreamDialer(ctx, configUrl)
+		dialer, err := configurl.New[transport.StreamDialer](ctx, configRegistry, configUrl)
 		if err != nil {
 			return nil, v, fmt.Errorf("getStreamDialer failed: %w", err)
 		}
@@ -459,10 +462,10 @@ func (f *StrategyFinder) findFallback(
 	defer raceDone()
 	raceStart := time.Now()
 
-	configModule := configurl.NewDefaultProviders()
+	configRegistry := configurl.NewDefaultRegistry()
 
 	fallback, err := raceTests(raceCtx, 250*time.Millisecond, fallbackConfigs, func(index int, fallbackConfig fallbackEntryConfig) (*SearchResult, error) {
-		dialer, configSignature, err := f.makeDialerFromConfig(raceCtx, configModule, fallbackConfig)
+		dialer, configSignature, err := f.makeDialerFromConfig(raceCtx, configRegistry, fallbackConfig)
 		if err != nil {
 			// Make up a config signature in case of failure.
 			configSignature := makeConfigErrorSignature(raceCtx, fallbackConfig)
