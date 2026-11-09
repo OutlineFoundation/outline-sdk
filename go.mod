@@ -5,7 +5,7 @@ go 1.25.0
 toolchain go1.25.5
 
 require (
-	github.com/eycorsican/go-tun2socks v1.16.11
+	github.com/OutlineFoundation/go-tun2socks v0.0.0-20261109155258-912c3d7abed3
 	github.com/google/gopacket v1.1.19
 	github.com/shadowsocks/go-shadowsocks2 v0.1.5
 	github.com/stretchr/testify v1.8.4

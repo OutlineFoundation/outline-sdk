@@ -20,7 +20,7 @@ import (
 	"net"
 
 	"golang.getoutline.org/sdk/transport"
-	lwip "github.com/eycorsican/go-tun2socks/core"
+	lwip "github.com/OutlineFoundation/go-tun2socks/core"
 )
 
 // Compilation guard against interface implementation

@@ -21,7 +21,7 @@ import (
 	"sync"
 
 	"golang.getoutline.org/sdk/network/packetrelay"
-	lwip "github.com/eycorsican/go-tun2socks/core"
+	lwip "github.com/OutlineFoundation/go-tun2socks/core"
 )
 
 // session holds the PacketRelay association for one lwIP UDPConn. It is

@@ -20,7 +20,7 @@ import (
 	"sync/atomic"
 
 	"golang.getoutline.org/sdk/network"
-	lwip "github.com/eycorsican/go-tun2socks/core"
+	lwip "github.com/OutlineFoundation/go-tun2socks/core"
 )
 
 // Compilation guard against interface implementation
