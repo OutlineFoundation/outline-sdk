@@ -27,12 +27,13 @@ import (
 	"testing"
 	"time"
 
-	"golang.getoutline.org/sdk/transport"
-	"golang.getoutline.org/sdk/x/smart"
 	"github.com/stretchr/testify/require"
+	"golang.getoutline.org/sdk/transport"
+	"golang.getoutline.org/sdk/x/configurl"
+	"golang.getoutline.org/sdk/x/smart"
 )
 
-// mockStreamDialer intercepts stream connections made by StrategyFinder.
+// mockStreamDialer intercepts stream connections made by Finder.
 // It redirects connection attempts for specific badssl.com endpoints to local mock servers,
 // and fails all other connections to simulate a completely broken network environment.
 type mockStreamDialer struct {
@@ -126,17 +127,26 @@ fallback:
 	logBuffer := new(bytes.Buffer)
 	logger := log.New(logBuffer, "", log.LstdFlags)
 
-	finder := smart.StrategyFinder{
-		LogWriter:    logger.Writer(),
-		TestTimeout:  5 * time.Second,
-		StreamDialer: &mockStreamDialer{
-			base:                     &transport.TCPDialer{},
-			untrustedHTTPSServerAddr: ts.Listener.Addr().String(),
-			captivePortalServerAddr:  captivePortalAddr,
-		},
-		PacketDialer: &errorPacketDialer{},
+	registry := configurl.NewDefaultRegistry()
+	streamDialer := &mockStreamDialer{
+		base:                     &transport.TCPDialer{},
+		untrustedHTTPSServerAddr: ts.Listener.Addr().String(),
+		captivePortalServerAddr:  captivePortalAddr,
 	}
-	finder.RegisterFallbackParser("error", func(ctx context.Context, config smart.YAMLNode) (transport.StreamDialer, string, error) {
+	parseStreamDialer := func(context.Context, configurl.Registry, *configurl.Config) (transport.StreamDialer, error) {
+		return streamDialer, nil
+	}
+	configurl.RegisterBase(registry, parseStreamDialer)
+	packetDialer := &errorPacketDialer{}
+	parsePacketDialer := func(context.Context, configurl.Registry, *configurl.Config) (transport.PacketDialer, error) {
+		return packetDialer, nil
+	}
+	configurl.RegisterBase(registry, parsePacketDialer)
+	finderConfig := smart.NewFinderConfig().
+		SetConfigURLRegistry(registry).
+		SetLogWriter(logger.Writer()).
+		SetTestTimeout(5 * time.Second)
+	finderConfig.RegisterFallbackParser("error", func(ctx context.Context, config smart.YAMLNode) (transport.StreamDialer, string, error) {
 		m, ok := config.(map[string]any)
 		if !ok {
 			return nil, "", fmt.Errorf("invalid config of type %T", config)
@@ -144,8 +154,10 @@ fallback:
 		errStr, _ := m["error"].(string)
 		return nil, "signature_placeholder", errors.New(errStr)
 	})
+	finder, err := finderConfig.New()
+	require.NoError(t, err)
 
-	_, err := finder.NewDialer(context.Background(), testDomains, configBytes)
+	_, err = finder.NewDialer(context.Background(), testDomains, configBytes)
 
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "could not find a working fallback: all tests failed")
@@ -158,7 +170,8 @@ fallback:
 		"🏃 running test: 'ss://Y2hhY2hhMjAtaWV0Zi1wb2x5MTMwNTprSzdEdHQ0MkJLOE9hRjBKYjdpWGFK@1.2.3.4:9999/?outline=1'",
 		"❌ Failed to create fallback[1]:",
 		"failed to start dialer",
-		"🏃 running test: 'socks5://192.168.1.10:1080' (domain: www.example.com.)",
+		// Test domains run in parallel, and the first failure suppresses the others' logs.
+		"🏃 running test: 'socks5://192.168.1.10:1080'",
 	}
 	logContent := logBuffer.String()
 	for _, expectedLog := range expectedLogs {

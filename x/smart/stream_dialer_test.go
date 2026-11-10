@@ -13,7 +13,7 @@ dns:
   - randomkey: {}
 `
 	configBytes := []byte(config)
-	finder := &StrategyFinder{}
+	finder := &finder{}
 	_, err := finder.parseConfig(configBytes)
 	require.Error(t, err)
 }
@@ -47,7 +47,7 @@ fallback:
   - socks5://192.168.1.10:1080
 `
 	configBytes := []byte(config)
-	finder := &StrategyFinder{}
+	finder := &finder{}
 	parsedConfig, err := finder.parseConfig(configBytes)
 	require.NoError(t, err)
 
@@ -85,7 +85,7 @@ fallback:
       SponsorId: FFFFFFFFFFFFFFFF
 `
 	configBytes := []byte(config)
-	finder := &StrategyFinder{}
+	finder := &finder{}
 	parsedConfig, err := finder.parseConfig(configBytes)
 	require.NoError(t, err)
 

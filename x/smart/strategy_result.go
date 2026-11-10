@@ -21,7 +21,7 @@ import (
 	"github.com/goccy/go-yaml"
 )
 
-// StrategyResultCache is a cache of strategy results that can be used by [StrategyFinder]
+// StrategyResultCache is a cache of strategy results that can be used by [Finder]
 // to resume a strategy efficiently.
 // Implementations are expected to be called concurrently from different goroutines.
 type StrategyResultCache interface {
@@ -35,7 +35,7 @@ type StrategyResultCache interface {
 }
 
 // winningStrategyCacheKey is the key for storing the winning strategy in the
-// [StrategyResultCache] each time [StrategyFinder].NewDialer is invoked.
+// [StrategyResultCache] each time [Finder.NewDialer] is invoked.
 const winningStrategyCacheKey = "winning_strategy"
 
 // winningConfig holds the configuration of a successful strategy.
