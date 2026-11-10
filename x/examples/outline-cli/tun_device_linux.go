@@ -18,9 +18,9 @@ import (
 	"errors"
 	"fmt"
 
-	"golang.getoutline.org/sdk/network"
 	"github.com/songgao/water"
 	"github.com/vishvananda/netlink"
+	"golang.getoutline.org/sdk/network"
 )
 
 type tunDevice struct {
