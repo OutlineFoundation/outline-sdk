@@ -161,12 +161,63 @@ func NewH2ProxyTransport(dialer transport.StreamDialer, proxyAddr string, opts .
 // NewH3ProxyTransport creates an HTTP/3 transport that establishes a QUIC connection to the proxy using the given [net.PacketConn].
 // The proxy address must be in the form "host:port".
 //
+// The connection must accept the proxy address in WriteTo. A UDP socket only accepts IP addresses,
+// so a hostname is rejected for a connection with the UDP-specific methods QUIC-Go looks for.
+// Use [NewH3ProxyTransportFromDialer] to let the transport resolve the proxy address.
+//
 // For HTTP/3 over QUIC over a datagram connection.
 // [tls.WithALPN] has no effect on this transport.
 func NewH3ProxyTransport(conn net.PacketConn, proxyAddr string, opts ...TransportOption) (ProxyRoundTripper, error) {
 	if conn == nil {
 		return nil, errors.New("conn must not be nil")
 	}
+	return newH3ProxyTransport(proxyAddr, opts, func(ctx context.Context, tlsCfg *stdTLS.Config, quicCfg *quic.Config) (quic.EarlyConnection, error) {
+		parsedProxyAddr, err := transport.MakeNetAddr("udp", proxyAddr)
+		if err != nil {
+			return nil, fmt.Errorf("failed to parse proxy address %s: %w", proxyAddr, err)
+		}
+		// QUIC-Go writes to such a connection with WriteMsgUDP, and panics if the address is not a UDP address.
+		if _, isUDPConn := conn.(quic.OOBCapablePacketConn); isUDPConn {
+			if _, isUDPAddr := parsedProxyAddr.(*net.UDPAddr); !isUDPAddr {
+				return nil, fmt.Errorf("proxy address %s must be an IP address for a UDP connection", proxyAddr)
+			}
+		}
+		return quic.DialEarly(ctx, conn, parsedProxyAddr, tlsCfg, quicCfg)
+	})
+}
+
+// NewH3ProxyTransportFromDialer creates an HTTP/3 transport that establishes each QUIC connection to the proxy
+// over a packet connection dialed with the given [transport.PacketDialer].
+// The proxy address must be in the form "host:port".
+//
+// The dialer decides how the address is resolved: a [transport.UDPDialer] resolves a hostname locally,
+// while a dialer that goes through a relay can send the hostname to it. A new QUIC connection dials again.
+//
+// For HTTP/3 over QUIC over a datagram connection.
+// [tls.WithALPN] has no effect on this transport.
+func NewH3ProxyTransportFromDialer(dialer transport.PacketDialer, proxyAddr string, opts ...TransportOption) (ProxyRoundTripper, error) {
+	if dialer == nil {
+		return nil, errors.New("dialer must not be nil")
+	}
+	return newH3ProxyTransport(proxyAddr, opts, func(ctx context.Context, tlsCfg *stdTLS.Config, quicCfg *quic.Config) (quic.EarlyConnection, error) {
+		conn, err := dialer.DialPacket(ctx, proxyAddr)
+		if err != nil {
+			return nil, fmt.Errorf("failed to dial proxy %s: %w", proxyAddr, err)
+		}
+		qconn, err := quic.DialEarly(ctx, newDialedPacketConn(conn), conn.RemoteAddr(), tlsCfg, quicCfg)
+		if err != nil {
+			conn.Close()
+			return nil, err
+		}
+		// QUIC-Go does not close a connection it did not create.
+		context.AfterFunc(qconn.Context(), func() { conn.Close() })
+		return qconn, nil
+	})
+}
+
+type quicDialFunc func(ctx context.Context, tlsCfg *stdTLS.Config, quicCfg *quic.Config) (quic.EarlyConnection, error)
+
+func newH3ProxyTransport(proxyAddr string, opts []TransportOption, dial quicDialFunc) (ProxyRoundTripper, error) {
 	host, _, err := net.SplitHostPort(proxyAddr)
 	if err != nil {
 		return nil, fmt.Errorf("failed to parse proxy address %s: %w", proxyAddr, err)
@@ -182,12 +233,7 @@ func NewH3ProxyTransport(conn net.PacketConn, proxyAddr string, opts ...Transpor
 
 	tr := &http3.Transport{
 		Dial: func(ctx context.Context, _ string, tlsCfg *stdTLS.Config, quicCfg *quic.Config) (quic.EarlyConnection, error) {
-			parsedProxyAddr, err := transport.MakeNetAddr("udp", proxyAddr)
-			if err != nil {
-				return nil, fmt.Errorf("failed to parse proxy address %s: %w", proxyAddr, err)
-			}
-
-			return quic.DialEarly(ctx, conn, parsedProxyAddr, tlsCfg, quicCfg)
+			return dial(ctx, tlsCfg, quicCfg)
 		},
 		TLSClientConfig: toStdConfig(tlsConfig),
 	}
