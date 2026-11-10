@@ -27,6 +27,15 @@ import (
 
 const packetMTU = 1500
 
+// outQueueDepth bounds the queue of outgoing packets waiting for the consumer. At packetBufCap per
+// slot this caps queue memory at ~512 KiB. Once it is full forwardOutgoingIPPacket blocks, which is
+// genuine backpressure: the consumer is truly slower than lwIP is producing.
+const outQueueDepth = 256
+
+// packetBufCap is the capacity of a pooled packet buffer. It is larger than packetMTU so a
+// full-MTU packet never forces the copy in forwardOutgoingIPPacket to reallocate.
+const packetBufCap = 2048
+
 // Compilation guard against interface implementation
 var _ network.IPDevice = (*lwIPDevice)(nil)
 
@@ -38,9 +47,12 @@ type lwIPDevice struct {
 	// whether the device has been closed
 	done chan struct{}
 
-	// async read call and its result
+	// Outgoing IP packets, already copied out of the lwIP pbuf and owned by whoever receives
+	// them. Buffered so forwardOutgoingIPPacket does not block; see the comment there.
 	rdBuf chan []byte
-	rdN   chan int
+
+	// pktPool recycles those copies.
+	pktPool sync.Pool
 }
 
 // Singleton instance
@@ -85,8 +97,7 @@ func ConfigureDevice(sd transport.StreamDialer, pp network.PacketProxy) (network
 		udp:   newUDPHandler(pp),
 		stack: lwip.NewLWIPStack(),
 		done:  make(chan struct{}),
-		rdBuf: make(chan []byte),
-		rdN:   make(chan int),
+		rdBuf: make(chan []byte, outQueueDepth),
 	}
 	lwip.RegisterTCPConnHandler(inst.tcp)
 	lwip.RegisterUDPConnHandler(inst.udp)
@@ -115,8 +126,7 @@ func ConfigureDeviceWithRelay(sd transport.StreamDialer, pr packetrelay.PacketRe
 		udp:   newUDPRelayHandler(pr),
 		stack: lwip.NewLWIPStack(),
 		done:  make(chan struct{}),
-		rdBuf: make(chan []byte),
-		rdN:   make(chan int),
+		rdBuf: make(chan []byte, outQueueDepth),
 	}
 	lwip.RegisterTCPConnHandler(inst.tcp)
 	lwip.RegisterUDPConnHandler(inst.udp)
@@ -146,29 +156,57 @@ func (d *lwIPDevice) MTU() int {
 	return packetMTU
 }
 
-// forwardOutgoingIPPacket writes an IP packet response `b` to this device. The packet can be read by calling the Read
-// function, or it can be redirected to an [io.Writer] if the WriteTo function has been called. forwardOutgoingIPPacket
-// blocks until the packet is successfully consumed by a Read or WriteTo.
+// forwardOutgoingIPPacket queues an IP packet response `b` for the consumer. The packet is then
+// delivered by Read, or written to the destination if WriteTo has been called.
 //
-// forwardOutgoingIPPacket can be used as an output function for lwIP.
+// forwardOutgoingIPPacket is registered as lwIP's output function, and lwIP calls it while holding
+// its global stack lock. The inbound path needs that same lock for every packet handed to
+// stack.Write, so this function must not block on the consumer: doing so serializes the whole
+// stack behind the consumer's write and starves the reader.
 //
-// forwardOutgoingIPPacket might be called by multiple goroutines (for example, when multiple UDP packets arrive at the
-// same time). We sequentialize the calls by using channels, if performance issues arise in the future, we can use
-// other more performant but more error-prone methods (e.g. the [sync] package) to resolve them.
+// It therefore copies the packet and returns without waiting. The copy is not an optimization --
+// `b` aliases the C pbuf payload (see go-tun2socks core/output_export.go), which lwIP frees as
+// soon as this callback returns, so ownership has to be taken before then.
+//
+// forwardOutgoingIPPacket might be called by multiple goroutines (for example, when multiple UDP
+// packets arrive at the same time); the channel send serializes them.
 func (d *lwIPDevice) forwardOutgoingIPPacket(b []byte) (int, error) {
 	if len(b) == 0 {
 		return 0, nil
 	}
+	// Checked before the send below. rdBuf is buffered, so on a closed device both cases of that
+	// select can be ready at once, and select picks between ready cases at random -- which would
+	// let a packet be queued onto a device that is already shutting down.
 	select {
-	case d.rdBuf <- b:
-		select {
-		case n := <-d.rdN:
-			return n, nil
-		case <-d.done:
-			return 0, network.ErrClosed
-		}
 	case <-d.done:
 		return 0, network.ErrClosed
+	default:
+	}
+	bufp := d.getBuf()
+	*bufp = append((*bufp)[:0], b...)
+	select {
+	case d.rdBuf <- *bufp:
+		return len(b), nil
+	case <-d.done:
+		d.recycle(*bufp)
+		return 0, network.ErrClosed
+	}
+}
+
+// getBuf borrows a packet buffer from the pool, allocating one if the pool is empty.
+func (d *lwIPDevice) getBuf() *[]byte {
+	if v := d.pktPool.Get(); v != nil {
+		return v.(*[]byte)
+	}
+	b := make([]byte, 0, packetBufCap)
+	return &b
+}
+
+// recycle returns a packet buffer to the pool once the consumer is done with it.
+func (d *lwIPDevice) recycle(s []byte) {
+	if cap(s) >= packetBufCap {
+		b := s[:0]
+		d.pktPool.Put(&b)
 	}
 }
 
@@ -176,12 +214,21 @@ func (d *lwIPDevice) forwardOutgoingIPPacket(b []byte) (int, error) {
 // a packet arrives or this device is closed. If a packet is too long to fit in the supplied buffer `p`, the excess
 // bytes are discarded.
 //
-// Read returns [io.EOF] error if this device is closed or no more data is available.
+// Read returns [io.EOF] error if this device is closed or no more data is available. A closed
+// device reports io.EOF even if packets are still queued: those packets belong to a session that
+// has ended, and the [network.IPDevice] contract promises io.EOF once closed.
 func (d *lwIPDevice) Read(p []byte) (int, error) {
+	// Checked before the receive below, which would otherwise be free to pick a queued packet over
+	// the closed done channel; select chooses among ready cases at random.
+	select {
+	case <-d.done:
+		return 0, io.EOF
+	default:
+	}
 	select {
 	case s := <-d.rdBuf:
 		n := copy(p, s)
-		d.rdN <- n
+		d.recycle(s)
 		return n, nil
 	case <-d.done:
 		return 0, io.EOF
@@ -189,24 +236,28 @@ func (d *lwIPDevice) Read(p []byte) (int, error) {
 }
 
 // WriteTo implements [io.WriterTo]. It writes all IP packets from TCP/UDP responses to `w` until all data is written
-// or an error occurs. This function will not allocate any intermediate buffers.
+// or an error occurs. Packets come from the pooled buffer filled by forwardOutgoingIPPacket.
 //
 // WriteTo returns the total number of bytes written and any error encountered during the write. If there are no more
 // data available, WriteTo returns nil error instead of [io.EOF].
 func (d *lwIPDevice) WriteTo(w io.Writer) (int64, error) {
 	nw := int64(0)
 	for {
+		// Checked before the receive below for the same reason as in Read: with a buffered rdBuf
+		// both cases can be ready on a closed device, and packets from an ended session must not
+		// be written to the destination.
+		select {
+		case <-d.done:
+			return nw, nil
+		default:
+		}
 		select {
 		case s := <-d.rdBuf:
 			n, err := w.Write(s)
 			nw += int64(n)
-			select {
-			case d.rdN <- n:
-				if err != nil {
-					return nw, err
-				}
-			case <-d.done:
-				return nw, nil
+			d.recycle(s)
+			if err != nil {
+				return nw, err
 			}
 		case <-d.done:
 			return nw, nil
