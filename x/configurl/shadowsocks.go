@@ -155,11 +155,7 @@ func parseShadowsocksSIP002URL(url url.URL) (*shadowsocksConfig, error) {
 		return nil, errors.New("host not specified")
 	}
 	config.serverAddress = url.Host
-	// Use the decoded user info. url.User.String() would return it percent-encoded again.
-	userInfo := url.User.Username()
-	if password, ok := url.User.Password(); ok {
-		userInfo += ":" + password
-	}
+	userInfo := url.User.String()
 	// Cipher info can be optionally encoded with Base64URL.
 	encoding := base64.URLEncoding.WithPadding(base64.NoPadding)
 	decodedUserInfo, err := encoding.DecodeString(userInfo)
@@ -167,13 +163,15 @@ func parseShadowsocksSIP002URL(url url.URL) (*shadowsocksConfig, error) {
 		// Try base64 decoding in legacy mode
 		decodedUserInfo, err = base64.StdEncoding.DecodeString(userInfo)
 	}
-	var cipherInfo string
+	var cipherName, secret string
+	var found bool
 	if err == nil {
-		cipherInfo = string(decodedUserInfo)
+		cipherName, secret, found = strings.Cut(string(decodedUserInfo), ":")
 	} else {
-		cipherInfo = userInfo
+		// Plain user info: use the decoded values, as userInfo is percent-encoded.
+		cipherName = url.User.Username()
+		secret, found = url.User.Password()
 	}
-	cipherName, secret, found := strings.Cut(cipherInfo, ":")
 	if !found {
 		return nil, errors.New("invalid cipher info: no ':' separator")
 	}
