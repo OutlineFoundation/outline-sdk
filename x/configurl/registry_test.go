@@ -262,26 +262,18 @@ func TestRegistryWrappersReachNestedDependencies(t *testing.T) {
 	require.IsType(t, &transport.TCPDialer{}, sd, "wrappers leave the original base unchanged")
 }
 
-type cancelablePacketListener struct{ observed context.Context }
-
-// ListenPacket implements [transport.PacketListener].
-func (l *cancelablePacketListener) ListenPacket(ctx context.Context) (net.PacketConn, error) {
-	l.observed = ctx
-	return nil, ctx.Err()
-}
-
 func TestParserForwardsCancellationToInitialization(t *testing.T) {
 	registry := configurl.NewDefaultRegistry()
-	listener := &cancelablePacketListener{}
-	parseListener := func(context.Context, configurl.Registry, *configurl.Config) (transport.PacketListener, error) {
-		return listener, nil
-	}
-	configurl.RegisterBase(registry, parseListener)
+	var observed context.Context
+	configurl.Register(registry, "init", func(ctx context.Context, _ configurl.Registry, _ *configurl.Config) (transport.PacketDialer, error) {
+		observed = ctx
+		return nil, ctx.Err()
+	})
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
-	_, err := configurl.New[transport.StreamDialer](ctx, registry, "h3connect://proxy.invalid:443")
+	_, err := configurl.New[transport.StreamDialer](ctx, registry, "init:|h3connect://proxy.invalid:443")
 	require.ErrorIs(t, err, context.Canceled)
-	require.Same(t, ctx, listener.observed, "HTTP/3 setup receives the construction context")
+	require.Same(t, ctx, observed, "a dependency's parser receives the construction context")
 }
 
 func checkNilParserResults[T any](t *testing.T) {

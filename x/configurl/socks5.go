@@ -35,7 +35,7 @@ func parseSOCKS5PacketDialer(ctx context.Context, registry Registry, config *Con
 		return nil, err
 	}
 	client.EnablePacket(pd)
-	return transport.PacketListenerDialer{Listener: client}, nil
+	return packetListenerDialer{Listener: client}, nil
 }
 
 func parseSOCKS5PacketListener(ctx context.Context, registry Registry, config *Config) (transport.PacketListener, error) {

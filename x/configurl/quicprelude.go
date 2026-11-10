@@ -25,6 +25,18 @@ import (
 	"golang.getoutline.org/sdk/x/quicprelude"
 )
 
+func parseQUICPreludePacketDialer(ctx context.Context, registry Registry, config *Config) (transport.PacketDialer, error) {
+	inner, err := NewFromConfig[transport.PacketDialer](ctx, registry, config.BaseConfig)
+	if err != nil {
+		return nil, err
+	}
+	preludeConfig, err := newQUICPreludeConfigFromURL(config.URL)
+	if err != nil {
+		return nil, err
+	}
+	return preludeConfig.NewPacketDialer(inner)
+}
+
 func parseQUICPreludePacketListener(ctx context.Context, registry Registry, config *Config) (transport.PacketListener, error) {
 	inner, err := NewFromConfig[transport.PacketListener](ctx, registry, config.BaseConfig)
 	if err != nil {

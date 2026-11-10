@@ -61,7 +61,7 @@ func parseShadowsocksPacketDialer(ctx context.Context, registry Registry, config
 		return nil, err
 	}
 	// TODO: support UDP prefix.
-	return transport.PacketListenerDialer{Listener: pl}, nil
+	return packetListenerDialer{Listener: pl}, nil
 }
 
 func parseShadowsocksPacketListener(ctx context.Context, registry Registry, config *Config) (transport.PacketListener, error) {
