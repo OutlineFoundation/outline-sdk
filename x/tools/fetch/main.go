@@ -95,6 +95,19 @@ func overrideAddress(original string, newHost string, newPort string) (string, e
 	return net.JoinHostPort(host, port), nil
 }
 
+// dialQUICEarly leaves destination resolution to the packet connection.
+func dialQUICEarly(ctx context.Context, qt *quic.Transport, address string, tlsConf *tls.Config, quicConf *quic.Config) (quic.EarlyConnection, error) {
+	remoteAddr, err := transport.MakeNetAddr("udp", address)
+	if err != nil {
+		return nil, err
+	}
+	// Fetch owns this packet connection for the request. Closing it cancels a
+	// pending DNS lookup if dialing is canceled or times out.
+	stopClose := context.AfterFunc(ctx, func() { _ = qt.Conn.Close() })
+	defer stopClose()
+	return qt.DialEarly(ctx, remoteAddr, tlsConf, quicConf)
+}
+
 func main() {
 	verboseFlag := flag.Bool("v", false, "Enable debug output")
 
@@ -204,6 +217,7 @@ func main() {
 			}
 		}
 	} else if *protoFlag == "h3" {
+		providers.PacketListeners.BaseInstance = resolvingUDPListener{}
 		quicVersionValue := *quicVersionsFlag
 		if quicVersionValue == "" {
 			quicVersionValue = defaultQUICVersions
@@ -226,6 +240,7 @@ func main() {
 		quicTransport := &quic.Transport{
 			Conn: conn,
 		}
+		defer conn.Close()
 		defer quicTransport.Close()
 		httpTransport := &http3.Transport{
 			TLSClientConfig: &tlsConfig,
@@ -234,13 +249,9 @@ func main() {
 				if err != nil {
 					return nil, fmt.Errorf("invalid address: %w", err)
 				}
-				udpAddr, err := net.ResolveUDPAddr("udp", addressToDial)
-				if err != nil {
-					return nil, err
-				}
 				quicConf = quicConf.Clone()
 				quicConf.Versions = quicVersions
-				conn, err := quicTransport.DialEarly(ctx, udpAddr, tlsConf, quicConf)
+				conn, err := dialQUICEarly(ctx, quicTransport, addressToDial, tlsConf, quicConf)
 				if err != nil {
 					return nil, err
 				}
