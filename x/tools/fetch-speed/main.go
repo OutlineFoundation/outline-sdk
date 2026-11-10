@@ -27,6 +27,7 @@ import (
 	"strings"
 	"time"
 
+	"golang.getoutline.org/sdk/transport"
 	"golang.getoutline.org/sdk/x/configurl"
 )
 
@@ -58,7 +59,7 @@ func main() {
 		os.Exit(1)
 	}
 
-	dialer, err := configurl.NewDefaultProviders().NewStreamDialer(context.Background(), *transportFlag)
+	dialer, err := configurl.New[transport.StreamDialer](context.Background(), configurl.NewDefaultRegistry(), *transportFlag)
 	if err != nil {
 		log.Fatalf("Could not create dialer: %v\n", err)
 	}

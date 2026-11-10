@@ -77,7 +77,7 @@ func TestWinningStrategy_MarshalProxyless(t *testing.T) {
 			require.NoError(t, err)
 			require.Equal(t, tc.yaml, strings.TrimSpace(string(actual)))
 
-			finder := &StrategyFinder{}
+			finder := &finder{}
 			cfg, err := finder.parseConfig([]byte(tc.yaml))
 			require.NoError(t, err)
 			require.Equal(t, cfg, configConfig(w))
@@ -115,7 +115,7 @@ func TestWinningStrategy_MarshalFallback(t *testing.T) {
 			require.NoError(t, err)
 			require.Equal(t, tc.yaml, strings.TrimSpace(string(actual)))
 
-			finder := &StrategyFinder{}
+			finder := &finder{}
 			cfg, err := finder.parseConfig([]byte(tc.yaml))
 			require.NoError(t, err)
 			require.Equal(t, cfg, configConfig(w))
@@ -175,7 +175,7 @@ func TestWinningStrategy_PromoteProxylessToFront(t *testing.T) {
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			winner, err := (&StrategyFinder{}).parseConfig([]byte(tc.winner))
+			winner, err := (&finder{}).parseConfig([]byte(tc.winner))
 			require.NoError(t, err)
 
 			winningConfig(winner).promoteProxylessToFront(&tc.input)
@@ -248,7 +248,7 @@ func TestWinningStrategy_GetFallbackIfExclusive(t *testing.T) {
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			winner, err := (&StrategyFinder{}).parseConfig([]byte(tc.winner))
+			winner, err := (&finder{}).parseConfig([]byte(tc.winner))
 			require.NoError(t, err)
 
 			actual, found := winningConfig(winner).getFallbackIfExclusive(&tc.input)

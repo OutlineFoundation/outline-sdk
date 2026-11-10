@@ -34,6 +34,7 @@ import (
 	"github.com/lmittmann/tint"
 	"github.com/quic-go/quic-go"
 	"github.com/quic-go/quic-go/http3"
+	"golang.getoutline.org/sdk/transport"
 	"golang.getoutline.org/sdk/x/configurl"
 	"golang.org/x/term"
 )
@@ -170,9 +171,9 @@ func main() {
 		tlsConfig.KeyLogWriter = f
 	}
 	var quicConn quic.EarlyConnection
-	providers := configurl.NewDefaultProviders()
+	registry := configurl.NewDefaultRegistry()
 	if *protoFlag == "h1" || *protoFlag == "h2" {
-		dialer, err := providers.NewStreamDialer(context.Background(), *transportFlag)
+		dialer, err := configurl.New[transport.StreamDialer](context.Background(), registry, *transportFlag)
 		if err != nil {
 			slog.Error("Could not create dialer", "error", err)
 			os.Exit(1)
@@ -212,7 +213,7 @@ func main() {
 			slog.Error("Invalid QUIC versions", "error", err)
 			os.Exit(1)
 		}
-		listener, err := providers.NewPacketListener(context.Background(), *transportFlag)
+		listener, err := configurl.New[transport.PacketListener](context.Background(), registry, *transportFlag)
 		if err != nil {
 			slog.Error("Could not create listener", "error", err)
 			os.Exit(1)

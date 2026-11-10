@@ -36,11 +36,11 @@ const (
 type OutlineDevice struct {
 	network.IPDevice
 	sd    transport.StreamDialer
-	pp    *outlinePacketProxy
+	pr    *outlinePacketRelay
 	svrIP net.IP
 }
 
-var configModule = configurl.NewDefaultProviders()
+var configRegistry = configurl.NewDefaultRegistry()
 
 func NewOutlineDevice(transportConfig string) (od *OutlineDevice, err error) {
 	ip, err := resolveShadowsocksServerIPFromConfig(transportConfig)
@@ -51,13 +51,13 @@ func NewOutlineDevice(transportConfig string) (od *OutlineDevice, err error) {
 		svrIP: ip,
 	}
 
-	if od.sd, err = configModule.NewStreamDialer(context.TODO(), transportConfig); err != nil {
+	if od.sd, err = configurl.New[transport.StreamDialer](context.TODO(), configRegistry, transportConfig); err != nil {
 		return nil, fmt.Errorf("failed to create TCP dialer: %w", err)
 	}
-	if od.pp, err = newOutlinePacketProxy(transportConfig); err != nil {
-		return nil, fmt.Errorf("failed to create delegate UDP proxy: %w", err)
+	if od.pr, err = newOutlinePacketRelay(transportConfig); err != nil {
+		return nil, fmt.Errorf("failed to create delegate UDP relay: %w", err)
 	}
-	if od.IPDevice, err = lwip2transport.ConfigureDevice(od.sd, od.pp); err != nil {
+	if od.IPDevice, err = lwip2transport.ConfigureDeviceWithRelay(od.sd, od.pr); err != nil {
 		return nil, fmt.Errorf("failed to configure lwIP: %w", err)
 	}
 
@@ -69,7 +69,7 @@ func (d *OutlineDevice) Close() error {
 }
 
 func (d *OutlineDevice) Refresh() error {
-	return d.pp.testConnectivityAndRefresh(connectivityTestResolver, connectivityTestDomain)
+	return d.pr.testConnectivityAndRefresh(connectivityTestResolver, connectivityTestDomain)
 }
 
 func (d *OutlineDevice) GetServerIP() net.IP {
