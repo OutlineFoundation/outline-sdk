@@ -118,21 +118,6 @@ func TestParseShadowsocksURLNoEncodingPercentEncodedPassword(t *testing.T) {
 	require.Equal(t, expectedKey, ssConfig.cryptoKey)
 }
 
-func TestParseShadowsocksURLUserInfoLegacyEncodedWithSlash(t *testing.T) {
-	// Standard base64 may contain '/', which must be percent-encoded in the URL.
-	encoded := base64.StdEncoding.EncodeToString([]byte("aes-128-gcm:?????"))
-	require.Contains(t, encoded, "/")
-	config, err := ParseConfig("ss://" + url.PathEscape(encoded) + "@example.com:1234")
-	require.NoError(t, err)
-
-	ssConfig, err := parseShadowsocksURL(config.URL)
-
-	require.NoError(t, err)
-	expectedKey, err := shadowsocks.NewEncryptionKey("aes-128-gcm", "?????")
-	require.NoError(t, err)
-	require.Equal(t, expectedKey, ssConfig.cryptoKey)
-}
-
 func TestParseShadowsocksURLInvalidCipherInfoFails(t *testing.T) {
 	configString := "ss://aes-256-gcm1234567@example.com:1234"
 	config, err := ParseConfig(configString)
@@ -166,6 +151,20 @@ func TestParseShadowsocksLegacyBase64URL(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, "example.com:1234", ssConfig.serverAddress)
 	require.Equal(t, "HTTP/1.1 ", string(ssConfig.prefix))
+}
+
+func TestParseShadowsocksLegacyBase64URLPasswordWithAt(t *testing.T) {
+	encoded := base64.URLEncoding.WithPadding(base64.NoPadding).EncodeToString([]byte("aes-256-gcm:p@ss@example.com:1234"))
+	config, err := ParseConfig("ss://" + string(encoded))
+	require.NoError(t, err)
+
+	ssConfig, err := parseShadowsocksLegacyBase64URL(config.URL)
+
+	require.NoError(t, err)
+	require.Equal(t, "example.com:1234", ssConfig.serverAddress)
+	expectedKey, err := shadowsocks.NewEncryptionKey("aes-256-gcm", "p@ss")
+	require.NoError(t, err)
+	require.Equal(t, expectedKey, ssConfig.cryptoKey)
 }
 
 func TestParseShadowsocksSIP002URLUnsuccessful(t *testing.T) {

@@ -126,8 +126,9 @@ func parseShadowsocksLegacyBase64URL(url url.URL) (*shadowsocksConfig, error) {
 	if newURL.User == nil {
 		return nil, fmt.Errorf("invalid user info: %w", err)
 	}
-	cipherInfoBytes := newURL.User.String()
-	cipherName, secret, found := strings.Cut(string(cipherInfoBytes), ":")
+	// Use the decoded user info. newURL.User.String() would return it percent-encoded again.
+	cipherName := newURL.User.Username()
+	secret, found := newURL.User.Password()
 	if !found {
 		return nil, errors.New("invalid cipher info: no ':' separator")
 	}
