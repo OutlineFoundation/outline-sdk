@@ -25,7 +25,7 @@ To configure the instance with TCP/UDP handlers:
 		// handle error
 	}
 
-[modified lwIP go library]: https://github.com/eycorsican/go-tun2socks
+[modified lwIP go library]: https://github.com/OutlineFoundation/go-tun2socks
 [lwIP library]: https://savannah.nongnu.org/projects/lwip/
 */
 package lwip2transport

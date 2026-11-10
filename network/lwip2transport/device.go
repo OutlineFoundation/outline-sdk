@@ -19,7 +19,7 @@ import (
 	"io"
 	"sync"
 
-	lwip "github.com/eycorsican/go-tun2socks/core"
+	lwip "github.com/OutlineFoundation/go-tun2socks/core"
 	"golang.getoutline.org/sdk/network"
 	"golang.getoutline.org/sdk/network/packetrelay"
 	"golang.getoutline.org/sdk/transport"
