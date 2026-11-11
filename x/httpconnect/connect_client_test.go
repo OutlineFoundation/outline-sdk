@@ -27,6 +27,7 @@ import (
 	"net/url"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/quic-go/quic-go/http3"
 	"github.com/stretchr/testify/require"
@@ -341,16 +342,13 @@ func Test_ConnectClient_H2_TLS_Multiplexed(t *testing.T) {
 	verifyTunnel(t, connClient)
 }
 
-// Test_ConnectClient_H3_QUIC verifies tunneling over HTTP/3, where CONNECT streams
-// run over QUIC rather than TCP. Uses http3.HTTPStreamer to access the raw H3 stream.
-func Test_ConnectClient_H3_QUIC(t *testing.T) {
-	t.Parallel()
+// newH3ProxySrv starts an HTTP/3 CONNECT proxy on srvConn and returns it with a cert pool trusting it.
+// It uses http3.HTTPStreamer to access the raw H3 stream.
+func newH3ProxySrv(t *testing.T, srvConn net.PacketConn) (*http3.Server, *x509.CertPool) {
+	t.Helper()
 
 	// http3.Server requires its own TLS config; borrow httptest's built-in cert.
 	tlsCert, certPool := tlsCertPool(t)
-
-	srvConn, err := net.ListenPacket("udp", "127.0.0.1:0")
-	require.NoError(t, err, "ListenPacket")
 
 	proxySrv := &http3.Server{
 		Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -389,6 +387,17 @@ func Test_ConnectClient_H3_QUIC(t *testing.T) {
 		_ = proxySrv.Close()
 		_ = srvConn.Close()
 	})
+	return proxySrv, certPool
+}
+
+// Test_ConnectClient_H3_QUIC verifies tunneling over HTTP/3, where CONNECT streams
+// run over QUIC rather than TCP.
+func Test_ConnectClient_H3_QUIC(t *testing.T) {
+	t.Parallel()
+
+	srvConn, err := net.ListenPacket("udp", "127.0.0.1:0")
+	require.NoError(t, err, "ListenPacket")
+	_, certPool := newH3ProxySrv(t, srvConn)
 
 	cliConn, err := net.ListenPacket("udp", "127.0.0.1:0")
 	require.NoError(t, err, "ListenPacket")
@@ -403,6 +412,153 @@ func Test_ConnectClient_H3_QUIC(t *testing.T) {
 	require.NoError(t, err, "NewConnectClient")
 
 	verifyTunnel(t, connClient)
+}
+
+// Test_H3ProxyTransport_HostnameOnUDPConn verifies that a hostname proxy address
+// on a UDP socket is an error. QUIC-Go would otherwise panic when it writes the
+// first packet, because a UDP socket cannot send to a name.
+func Test_H3ProxyTransport_HostnameOnUDPConn(t *testing.T) {
+	t.Parallel()
+
+	cliConn, err := net.ListenPacket("udp", "127.0.0.1:0")
+	require.NoError(t, err, "ListenPacket")
+	t.Cleanup(func() { _ = cliConn.Close() })
+
+	tr, err := NewH3ProxyTransport(cliConn, "localhost:443")
+	require.NoError(t, err, "NewH3ProxyTransport")
+	connClient, err := NewConnectClient(tr)
+	require.NoError(t, err, "NewConnectClient")
+
+	_, err = connClient.DialStream(context.Background(), "example.com:443")
+	require.ErrorContains(t, err, "must be an IP address")
+}
+
+// Test_ConnectClient_H3_Dialer_ResolvesHostname verifies that a hostname proxy
+// address works with a UDP dialer, which resolves the name itself.
+func Test_ConnectClient_H3_Dialer_ResolvesHostname(t *testing.T) {
+	t.Parallel()
+
+	// "localhost" may resolve to 127.0.0.1 or ::1, and a UDP dial does not fall
+	// back to another address. Listen on the address the dialer will choose.
+	probe, err := net.Dial("udp", "localhost:9")
+	require.NoError(t, err, "Dial")
+	loopback := probe.RemoteAddr().(*net.UDPAddr).IP
+	require.NoError(t, probe.Close())
+
+	srvConn, err := net.ListenUDP("udp", &net.UDPAddr{IP: loopback})
+	require.NoError(t, err, "ListenUDP")
+	_, certPool := newH3ProxySrv(t, srvConn)
+	_, port, err := net.SplitHostPort(srvConn.LocalAddr().String())
+	require.NoError(t, err)
+
+	// The test certificate names 127.0.0.1, not localhost.
+	tr, err := NewH3ProxyTransportFromDialer(&transport.UDPDialer{}, net.JoinHostPort("localhost", port),
+		WithTLSOptions(tls.WithCertVerifier(&tls.StandardCertVerifier{CertificateName: "127.0.0.1", Roots: certPool})),
+	)
+	require.NoError(t, err, "NewH3ProxyTransportFromDialer")
+
+	connClient, err := NewConnectClient(tr)
+	require.NoError(t, err, "NewConnectClient")
+
+	verifyTunnel(t, connClient)
+}
+
+// closeRecordingConn records whether Close was called.
+type closeRecordingConn struct {
+	net.Conn
+	closed chan struct{}
+	once   sync.Once
+}
+
+func (c *closeRecordingConn) Close() error {
+	c.once.Do(func() { close(c.closed) })
+	return c.Conn.Close()
+}
+
+// Test_ConnectClient_H3_Dialer_ForwardsHostname verifies that the dialer receives
+// the proxy hostname unresolved, so a dialer that goes through a relay can let
+// the relay resolve it. The name here does not resolve locally. It also verifies
+// that the dialed connection is closed once the QUIC connection is.
+func Test_ConnectClient_H3_Dialer_ForwardsHostname(t *testing.T) {
+	t.Parallel()
+
+	srvConn, err := net.ListenPacket("udp", "127.0.0.1:0")
+	require.NoError(t, err, "ListenPacket")
+	proxySrv, certPool := newH3ProxySrv(t, srvConn)
+	_, port, err := net.SplitHostPort(srvConn.LocalAddr().String())
+	require.NoError(t, err)
+	proxyAddr := net.JoinHostPort("proxy-only.invalid", port)
+
+	// Stands in for a relay that knows the name: it connects to the proxy by IP.
+	dialed := make(chan *closeRecordingConn, 1)
+	dialer := transport.FuncPacketDialer(func(ctx context.Context, addr string) (net.Conn, error) {
+		require.Equal(t, proxyAddr, addr)
+		conn, err := (&net.Dialer{}).DialContext(ctx, "udp", srvConn.LocalAddr().String())
+		if err != nil {
+			return nil, err
+		}
+		recorded := &closeRecordingConn{Conn: conn, closed: make(chan struct{})}
+		dialed <- recorded
+		return recorded, nil
+	})
+
+	tr, err := NewH3ProxyTransportFromDialer(dialer, proxyAddr,
+		WithTLSOptions(tls.WithCertVerifier(&tls.StandardCertVerifier{CertificateName: "127.0.0.1", Roots: certPool})),
+	)
+	require.NoError(t, err, "NewH3ProxyTransportFromDialer")
+
+	connClient, err := NewConnectClient(tr)
+	require.NoError(t, err, "NewConnectClient")
+
+	verifyTunnel(t, connClient)
+
+	conn := <-dialed
+	// Closing the server closes the QUIC connection.
+	require.NoError(t, proxySrv.Close())
+	select {
+	case <-conn.closed:
+	case <-time.After(5 * time.Second):
+		t.Fatal("dialed connection was not closed with the QUIC connection")
+	}
+}
+
+// Test_H3ProxyTransport_Dialer_ClosesConnOnDialFailure verifies that the dialed
+// connection is closed when the QUIC handshake fails, here because the context
+// expires while nothing answers.
+func Test_H3ProxyTransport_Dialer_ClosesConnOnDialFailure(t *testing.T) {
+	t.Parallel()
+
+	// A bound socket that never replies.
+	silent, err := net.ListenPacket("udp", "127.0.0.1:0")
+	require.NoError(t, err, "ListenPacket")
+	t.Cleanup(func() { _ = silent.Close() })
+
+	var recorded *closeRecordingConn
+	dialer := transport.FuncPacketDialer(func(ctx context.Context, addr string) (net.Conn, error) {
+		conn, err := (&net.Dialer{}).DialContext(ctx, "udp", addr)
+		if err != nil {
+			return nil, err
+		}
+		recorded = &closeRecordingConn{Conn: conn, closed: make(chan struct{})}
+		return recorded, nil
+	})
+
+	tr, err := NewH3ProxyTransportFromDialer(dialer, silent.LocalAddr().String())
+	require.NoError(t, err, "NewH3ProxyTransportFromDialer")
+	connClient, err := NewConnectClient(tr)
+	require.NoError(t, err, "NewConnectClient")
+
+	ctx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
+	defer cancel()
+	_, err = connClient.DialStream(ctx, "example.com:443")
+	require.Error(t, err)
+
+	require.NotNil(t, recorded, "the dialer was not called")
+	select {
+	case <-recorded.closed:
+	case <-time.After(5 * time.Second):
+		t.Fatal("dialed connection was not closed after the failed QUIC dial")
+	}
 }
 
 // newTargetSrv starts a local HTTP server that responds to any request with resp serialized as JSON.

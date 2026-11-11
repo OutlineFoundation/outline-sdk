@@ -59,7 +59,7 @@ Go callers choose the result type with [New]; the Usage section below shows how.
 The type matters: for example, socks5 can produce a StreamDialer,
 PacketDialer, or PacketListener, while tlsfrag produces only a StreamDialer.
 A parser can request dependencies of a different type: h3connect returns a
-StreamDialer but uses a PacketListener for its QUIC transport. Not every sequence
+StreamDialer but uses a PacketDialer for its QUIC transport. Not every sequence
 is valid; each dependency needs a registration for both its scheme and its Go type.
 
 # Built-in components
@@ -86,7 +86,7 @@ Three variants are available:
 
   - httpconnect: HTTP/1.1, or HTTP/2 if negotiated via TLS ALPN. When H2 is negotiated, CONNECT streams are multiplexed over a single TCP connection.
   - h2connect: Pure HTTP/2. Always multiplexed. Supports h2c (cleartext H2) via plain=true.
-  - h3connect: HTTP/3 over QUIC. Always multiplexed. QUIC runs over the packet listener from the element on its left, which defaults to a new UDP socket.
+  - h3connect: HTTP/3 over QUIC. Always multiplexed. Each QUIC connection is dialed with the packet dialer from the element on its left, which resolves the proxy address. It defaults to a new UDP socket and local resolution.
 
 The sni parameter sets the TLS SNI. The certname parameter sets the name to validate against the server certificate.
 For h2connect, plain=true enables h2c (cleartext HTTP/2 without TLS).
@@ -163,7 +163,7 @@ For more details, refer to [golang.getoutline.org/sdk/transport/tlsfrag].
 
 	tlsfrag:[LENGTH]
 
-QUIC prelude (packet listeners only, package [golang.getoutline.org/sdk/x/quicprelude])
+QUIC prelude (packet dialers and packet listeners, package [golang.getoutline.org/sdk/x/quicprelude])
 
 Sends prelude datagrams before packets that may carry a QUIC ClientHello, using
 the same socket. Other traffic passes unchanged. See [golang.getoutline.org/sdk/x/quicprelude]

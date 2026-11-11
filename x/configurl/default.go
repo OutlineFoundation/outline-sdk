@@ -31,6 +31,7 @@ func RegisterDefaultTypes(registry MutableRegistry) MutableRegistry {
 	Register(registry, "override", parseOverrideStreamDialer)
 	Register(registry, "override", parseOverridePacketDialer)
 
+	Register(registry, "quicprelude", parseQUICPreludePacketDialer)
 	Register(registry, "quicprelude", parseQUICPreludePacketListener)
 
 	Register(registry, "socks5", parseSOCKS5StreamDialer)

@@ -187,20 +187,18 @@ tls: ["probe:fail", "probe:win|tlsfrag:1"]
 	require.NotContains(t, string(data), "selected-dns")
 }
 
-type failingPacketListener struct {
-	err   error
-	calls atomic.Int32
-}
-
-func (l *failingPacketListener) ListenPacket(context.Context) (net.PacketConn, error) {
-	l.calls.Add(1)
-	return nil, l.err
-}
-
 func TestTLSKeepsPacketBases(t *testing.T) {
-	listenErr := errors.New("injected packet listener")
-	pd := &countingDNSDialer{}
-	listener := &failingPacketListener{err: listenErr}
+	dialErr := errors.New("injected packet dialer")
+	dnsDialer := &countingDNSDialer{}
+	var proxyDials atomic.Int32
+	// Fails dials to the HTTP/3 proxy, and answers everything else as DNS.
+	pd := transport.FuncPacketDialer(func(ctx context.Context, addr string) (net.Conn, error) {
+		if addr == "proxy.invalid:443" {
+			proxyDials.Add(1)
+			return nil, dialErr
+		}
+		return dnsDialer.DialPacket(ctx, addr)
+	})
 	registry := configurl.NewDefaultRegistry()
 	configurl.RegisterBase(registry, func(context.Context, configurl.Registry, *configurl.Config) (transport.StreamDialer, error) {
 		return namedDialer("fallback"), nil
@@ -208,19 +206,18 @@ func TestTLSKeepsPacketBases(t *testing.T) {
 	configurl.RegisterBase(registry, func(context.Context, configurl.Registry, *configurl.Config) (transport.PacketDialer, error) {
 		return pd, nil
 	})
-	configurl.RegisterBase(registry, func(context.Context, configurl.Registry, *configurl.Config) (transport.PacketListener, error) {
-		return listener, nil
-	})
 	f, err := NewFinderConfig().SetConfigURLRegistry(registry).New()
 	require.NoError(t, err)
 	dialer, _, err := f.(*finder).findTLS(context.Background(), nil, namedDialer("selected"), []string{"do53:address=192.0.2.53"})
 	require.NoError(t, err)
 	_, err = dialer.DialStream(context.Background(), "target.invalid:443")
 	require.EqualError(t, err, "selected@192.0.2.42:443")
-	require.EqualValues(t, 2, pd.queries.Load(), "do53 uses the original packet base")
-	_, _, err = f.(*finder).findTLS(context.Background(), nil, namedDialer("selected"), []string{"h3connect://proxy.invalid:443"})
-	require.Error(t, err)
-	require.EqualValues(t, 1, listener.calls.Load(), "h3connect uses the original packet listener")
+	require.EqualValues(t, 2, dnsDialer.queries.Load(), "do53 uses the original packet base")
+	dialer, _, err = f.(*finder).findTLS(context.Background(), nil, namedDialer("selected"), []string{"h3connect://proxy.invalid:443"})
+	require.NoError(t, err)
+	_, err = dialer.DialStream(context.Background(), "target.invalid:443")
+	require.ErrorIs(t, err, dialErr)
+	require.EqualValues(t, 1, proxyDials.Load(), "h3connect uses the original packet base")
 }
 
 func TestTLSRejectsMalformedConfigs(t *testing.T) {

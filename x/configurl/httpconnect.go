@@ -166,11 +166,12 @@ func parseH2ConnectStreamDialer(ctx context.Context, registry Registry, config *
 //
 // Config format: h3connect://[user:pass@]host:port[?sni=SNI][&certname=CERTNAME][&auth=TOKEN]
 //
-// QUIC runs over a single [net.PacketConn] obtained from the base packet listener (from the
-// previous element in the pipe chain), shared across all CONNECT streams (QUIC multiplexing).
-// With no previous element, the default packet listener creates a new UDP socket.
+// Each QUIC connection runs over a packet connection dialed to the proxy with the base packet
+// dialer (from the previous element in the pipe chain), and is shared across all CONNECT streams
+// (QUIC multiplexing). The base dialer resolves the proxy address: with no previous element, the
+// default packet dialer resolves a hostname locally and opens a UDP socket.
 func parseH3ConnectStreamDialer(ctx context.Context, registry Registry, config *Config) (transport.StreamDialer, error) {
-	pl, err := NewFromConfig[transport.PacketListener](ctx, registry, config.BaseConfig)
+	pd, err := NewFromConfig[transport.PacketDialer](ctx, registry, config.BaseConfig)
 	if err != nil {
 		return nil, err
 	}
@@ -178,13 +179,8 @@ func parseH3ConnectStreamDialer(ctx context.Context, registry Registry, config *
 	if err != nil {
 		return nil, err
 	}
-	conn, err := pl.ListenPacket(ctx)
+	tr, err := httpconnect.NewH3ProxyTransportFromDialer(pd, config.URL.Host, opts.transport...)
 	if err != nil {
-		return nil, fmt.Errorf("failed to create packet connection: %w", err)
-	}
-	tr, err := httpconnect.NewH3ProxyTransport(conn, config.URL.Host, opts.transport...)
-	if err != nil {
-		conn.Close()
 		return nil, err
 	}
 	return httpconnect.NewConnectClient(tr, opts.client...)
