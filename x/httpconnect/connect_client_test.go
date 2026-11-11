@@ -20,6 +20,8 @@ import (
 	"crypto/x509"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
+	"fmt"
 	"io"
 	"net"
 	"net/http"
@@ -27,7 +29,9 @@ import (
 	"net/url"
 	"sync"
 	"testing"
+	"time"
 
+	"github.com/quic-go/quic-go"
 	"github.com/quic-go/quic-go/http3"
 	"github.com/stretchr/testify/require"
 	"golang.getoutline.org/sdk/transport"
@@ -95,7 +99,6 @@ func verifyTunnel(t *testing.T, dialer transport.StreamDialer) {
 	require.NoError(t, json.NewDecoder(resp.Body).Decode(&got))
 	require.Equal(t, want, got)
 }
-
 
 // Test_ConnectClient_H1_Plain verifies that custom headers (e.g. Proxy-Authorization)
 // are forwarded on every CONNECT request when using a plain HTTP/1.1 proxy.
@@ -341,15 +344,17 @@ func Test_ConnectClient_H2_TLS_Multiplexed(t *testing.T) {
 	verifyTunnel(t, connClient)
 }
 
-// Test_ConnectClient_H3_QUIC verifies tunneling over HTTP/3, where CONNECT streams
-// run over QUIC rather than TCP. Uses http3.HTTPStreamer to access the raw H3 stream.
-func Test_ConnectClient_H3_QUIC(t *testing.T) {
-	t.Parallel()
+// newH3ProxyServer starts an HTTP/3 CONNECT proxy on a loopback UDP port. It listens on
+// "localhost", so the address it returns is whichever loopback IP the machine maps that name to.
+// It also returns a cert pool that trusts the proxy's certificate, which is valid for both
+// loopback IPs. Uses http3.HTTPStreamer to access the raw H3 stream.
+func newH3ProxyServer(t *testing.T) (*net.UDPAddr, *x509.CertPool) {
+	t.Helper()
 
 	// http3.Server requires its own TLS config; borrow httptest's built-in cert.
 	tlsCert, certPool := tlsCertPool(t)
 
-	srvConn, err := net.ListenPacket("udp", "127.0.0.1:0")
+	srvConn, err := net.ListenPacket("udp", "localhost:0")
 	require.NoError(t, err, "ListenPacket")
 
 	proxySrv := &http3.Server{
@@ -390,11 +395,28 @@ func Test_ConnectClient_H3_QUIC(t *testing.T) {
 		_ = srvConn.Close()
 	})
 
-	cliConn, err := net.ListenPacket("udp", "127.0.0.1:0")
-	require.NoError(t, err, "ListenPacket")
-	t.Cleanup(func() { _ = cliConn.Close() })
+	return srvConn.LocalAddr().(*net.UDPAddr), certPool
+}
 
-	tr, err := NewH3ProxyTransport(cliConn, srvConn.LocalAddr().String(),
+// newLoopbackPacketConn returns a UDP connection bound to an ephemeral port on ip, so it is in
+// the same IP family as a server listening on that IP.
+func newLoopbackPacketConn(t *testing.T, ip net.IP) net.PacketConn {
+	t.Helper()
+	conn, err := net.ListenPacket("udp", net.JoinHostPort(ip.String(), "0"))
+	require.NoError(t, err, "ListenPacket")
+	t.Cleanup(func() { _ = conn.Close() })
+	return conn
+}
+
+// Test_ConnectClient_H3_QUIC verifies tunneling over HTTP/3, where CONNECT streams
+// run over QUIC rather than TCP.
+func Test_ConnectClient_H3_QUIC(t *testing.T) {
+	t.Parallel()
+
+	proxyAddr, certPool := newH3ProxyServer(t)
+	cliConn := newLoopbackPacketConn(t, proxyAddr.IP)
+
+	tr, err := NewH3ProxyTransport(cliConn, proxyAddr.String(),
 		WithTLSOptions(tls.WithCertVerifier(&tls.StandardCertVerifier{Roots: certPool})),
 	)
 	require.NoError(t, err, "NewH3ProxyTransport")
@@ -403,6 +425,80 @@ func Test_ConnectClient_H3_QUIC(t *testing.T) {
 	require.NoError(t, err, "NewConnectClient")
 
 	verifyTunnel(t, connClient)
+}
+
+// Test_ConnectClient_H3_QUIC_HostnameOnRawUDPConn verifies that a proxy hostname over a plain
+// UDP socket fails with an error from DialStream. quic-go's optimized send path for raw sockets
+// casts the destination to *net.UDPAddr without checking, so without the guard this panics on a
+// quic-go goroutine and takes the process down.
+func Test_ConnectClient_H3_QUIC_HostnameOnRawUDPConn(t *testing.T) {
+	t.Parallel()
+
+	proxyIPAddr, _ := newH3ProxyServer(t)
+	proxyAddr := net.JoinHostPort("localhost", fmt.Sprint(proxyIPAddr.Port))
+	cliConn := newLoopbackPacketConn(t, proxyIPAddr.IP)
+	require.Implements(t, (*quic.OOBCapablePacketConn)(nil), cliConn, "a *net.UDPConn takes quic-go's raw socket path")
+
+	tr, err := NewH3ProxyTransport(cliConn, proxyAddr)
+	require.NoError(t, err, "NewH3ProxyTransport")
+
+	connClient, err := NewConnectClient(tr)
+	require.NoError(t, err, "NewConnectClient")
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	_, err = connClient.DialStream(ctx, "example.com:443")
+	require.ErrorContains(t, err, "cannot send to \""+proxyAddr+"\"")
+}
+
+// recordingPacketConn wraps a net.PacketConn as an interface, so it does not expose the raw socket
+// and quic-go sends through WriteTo. It records the destination of the first write and fails it.
+type recordingPacketConn struct {
+	net.PacketConn
+	mu    sync.Mutex
+	first net.Addr
+}
+
+func (c *recordingPacketConn) WriteTo(p []byte, addr net.Addr) (int, error) {
+	c.mu.Lock()
+	if c.first == nil {
+		c.first = addr
+	}
+	c.mu.Unlock()
+	return 0, errors.New("recordingPacketConn: write refused")
+}
+
+func (c *recordingPacketConn) firstDestination() net.Addr {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.first
+}
+
+// Test_ConnectClient_H3_QUIC_HostnameReachesWrappedConn verifies that a proxy hostname is handed
+// to a wrapped packet connection unresolved. This is what lets a SOCKS5 or Shadowsocks packet
+// connection carry the name to the proxy, which resolves it.
+func Test_ConnectClient_H3_QUIC_HostnameReachesWrappedConn(t *testing.T) {
+	t.Parallel()
+
+	inner := newLoopbackPacketConn(t, net.IPv4(127, 0, 0, 1))
+	cliConn := &recordingPacketConn{PacketConn: inner}
+
+	tr, err := NewH3ProxyTransport(cliConn, "proxy.example:443")
+	require.NoError(t, err, "NewH3ProxyTransport")
+
+	connClient, err := NewConnectClient(tr)
+	require.NoError(t, err, "NewConnectClient")
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	_, err = connClient.DialStream(ctx, "example.com:443")
+	require.ErrorContains(t, err, "write refused")
+
+	dst := cliConn.firstDestination()
+	require.NotNil(t, dst, "no datagram was written to the wrapped connection")
+	require.Equal(t, "proxy.example:443", dst.String(), "the hostname must reach the connection unresolved")
+	_, isUDPAddr := dst.(*net.UDPAddr)
+	require.False(t, isUDPAddr, "the destination must not have been resolved to a *net.UDPAddr")
 }
 
 // newTargetSrv starts a local HTTP server that responds to any request with resp serialized as JSON.
